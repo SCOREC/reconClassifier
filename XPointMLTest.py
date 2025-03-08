@@ -289,7 +289,7 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, filenameBase, inte
             'xk'
         )
 
-    # Save the figure if needed
+    # Save the figure if needed (could be removed as we save anyway)
     if saveFig:
         basename = os.path.basename(filenameBase)
         saveFilename = os.path.join(
