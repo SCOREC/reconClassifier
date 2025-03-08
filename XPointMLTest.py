@@ -57,12 +57,23 @@ class XPointDataset(Dataset):
         self.outDir = "plots"
         os.makedirs(self.outDir, exist_ok=True)
 
+        # load all the data
+        self.data = []
+        for fnum in fnumList:
+            print("fnum " + str(fnum))
+            self.data.append(self.load(fnum))
+
     def __len__(self):
         return len(self.fnumList)
 
     def __getitem__(self, idx):
         t0 = timer()
         fnum = self.fnumList[idx]
+        print(f"[XPointDataset] Fetching fileNum = {fnum}")
+        return self.data[idx]
+
+    def load(self, fnum):
+        t0 = timer()
         print(f"[XPointDataset] Processing fileNum = {fnum}")
 
         # Initialize gkData object
@@ -150,6 +161,8 @@ class XPointDataset(Dataset):
             "filenameBase": tmp.filenameBase, 
             "params": dict(self.params)  # copy of the params for local plotting
         }
+
+
 
 # 2) U-NET ARCHITECTURE
 class UNet(nn.Module):
