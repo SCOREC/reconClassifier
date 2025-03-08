@@ -67,7 +67,6 @@ class XPointDataset(Dataset):
         return len(self.fnumList)
 
     def __getitem__(self, idx):
-        t0 = timer()
         fnum = self.fnumList[idx]
         print(f"[XPointDataset] Fetching fileNum = {fnum}")
         return self.data[idx]
@@ -411,6 +410,7 @@ def main():
 
     t5 = timer()
     print("time (s) to apply model: " + str(t5-t4))
+    print("total time (s): " + str(t5-t0))
 
 if __name__ == "__main__":
     main()
