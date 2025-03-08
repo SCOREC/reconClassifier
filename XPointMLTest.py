@@ -355,13 +355,13 @@ def main():
 
     # Evaluate on combined set for demonstration. Exam this part to see if save to remove
     full_fnums = list(train_fnums) + list(val_fnums)
-    full_dataset = XPointDataset(paramFile, full_fnums, constructJz=1, interpFac=interpFac, saveFig=1)  
+    full_dataset = [train_dataset, val_dataset]
 
     t4 = timer()
-    print("time (s) to create gkyl data loader: " + str(t4-t3))
 
     with torch.no_grad():
-        for item in full_dataset:
+      for set in full_dataset:
+        for item in set:
             # item is a dict with keys: fnum, psi, mask, psi_np, mask_np, x, y, tmp, params
             fnum     = item["fnum"]
             psi_np   = item["psi_np"]
