@@ -11,6 +11,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
+from timeit import default_timer as timer
+
 # DATASET DEFINITION
 class XPointDataset(Dataset):
     """
@@ -55,11 +57,22 @@ class XPointDataset(Dataset):
         self.outDir = "plots"
         os.makedirs(self.outDir, exist_ok=True)
 
+        # load all the data
+        self.data = []
+        for fnum in fnumList:
+            print("fnum " + str(fnum))
+            self.data.append(self.load(fnum))
+
     def __len__(self):
         return len(self.fnumList)
 
     def __getitem__(self, idx):
         fnum = self.fnumList[idx]
+        print(f"[XPointDataset] Fetching fileNum = {fnum}")
+        return self.data[idx]
+
+    def load(self, fnum):
+        t0 = timer()
         print(f"[XPointDataset] Processing fileNum = {fnum}")
 
         # Initialize gkData object
@@ -92,15 +105,6 @@ class XPointDataset(Dataset):
         coords0 = varPsi.coords
 
         print(f"   psi shape: {psi_raw.shape}, min={psi_raw.min()}, max={psi_raw.max()}")
-
-        if self.constructJz:
-            [df_dx, df_dy, df_dz] = auxFuncs.genGradient(psi_raw, varPsi.dx)
-            [d2f_dxdx, d2f_dxdy, d2f_dxdz] = auxFuncs.genGradient(df_dx, varPsi.dx)
-            [d2f_dydx, d2f_dydy, d2f_dydz] = auxFuncs.genGradient(df_dy, varPsi.dx)
-            jz = -(d2f_dxdx + d2f_dydy) / varPsi.mu0
-        else:
-            varJz = gkData.gkData(self.paramFile, fnum, "jz", self.params).compactRead()
-            jz = varJz.data
 
         # -------------- 4) Interpolate if interpFac>1 --------------
         if self.interpFac > 1:
@@ -142,6 +146,9 @@ class XPointDataset(Dataset):
         psi_torch = torch.from_numpy(psi).float().unsqueeze(0)      # [1, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
+        t1 = timer()
+        print("time (s) to get gkyl data: " + str(t1-t0))
+
         return {
             "fnum": fnum,
             "psi": psi_torch,        # shape [1, Nx, Ny]
@@ -153,6 +160,8 @@ class XPointDataset(Dataset):
             "filenameBase": tmp.filenameBase, 
             "params": dict(self.params)  # copy of the params for local plotting
         }
+
+
 
 # 2) U-NET ARCHITECTURE
 class UNet(nn.Module):
@@ -303,7 +312,8 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, filenameBase, inte
 
 
 def main():
-    paramFile = '/lore/smithc11/projects/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
+    t0 = timer()
+    paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
 
     train_fnums = range(75, 101)  
     val_fnums   = range(101, 106)  
@@ -311,6 +321,8 @@ def main():
     train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1, interpFac=1, saveFig=1)
     val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1, interpFac=1, saveFig=1)
 
+    t1 = timer()
+    print("time (s) to create gkyl data loader: " + str(t1-t0))
 
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
     val_loader   = DataLoader(val_dataset,   batch_size=1, shuffle=False)
@@ -321,6 +333,9 @@ def main():
     criterion  = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+    t2 = timer()
+    print("time (s) to prepare model: " + str(t2-t1))
     
     num_epochs = 50
     for epoch in range(num_epochs):
@@ -328,6 +343,8 @@ def main():
         val_loss   = validate_one_epoch(model, val_loader, criterion, device)
         print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss:.4f}  ValLoss={val_loss:.4f}")
 
+    t3 = timer()
+    print("time (s) to train model: " + str(t3-t2))
 
     # (D) Plotting after training
     model.eval()    # Find out what this means
@@ -337,10 +354,13 @@ def main():
 
     # Evaluate on combined set for demonstration. Exam this part to see if save to remove
     full_fnums = list(train_fnums) + list(val_fnums)
-    full_dataset = XPointDataset(paramFile, full_fnums, constructJz=1, interpFac=interpFac, saveFig=1)  
+    full_dataset = [train_dataset, val_dataset]
+
+    t4 = timer()
 
     with torch.no_grad():
-        for item in full_dataset:
+      for set in full_dataset:
+        for item in set:
             # item is a dict with keys: fnum, psi, mask, psi_np, mask_np, x, y, tmp, params
             fnum     = item["fnum"]
             psi_np   = item["psi_np"]
@@ -387,6 +407,10 @@ def main():
                 outDir=outDir,
                 saveFig=True
             )
+
+    t5 = timer()
+    print("time (s) to apply model: " + str(t5-t4))
+    print("total time (s): " + str(t5-t0))
 
 if __name__ == "__main__":
     main()
