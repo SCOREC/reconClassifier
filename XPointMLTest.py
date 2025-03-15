@@ -9,6 +9,8 @@ from utils import plotParams
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+
 from torch.utils.data import DataLoader, Dataset
 
 from timeit import default_timer as timer
@@ -167,7 +169,7 @@ class XPointDataset(Dataset):
 class UNet(nn.Module):
     """
     A simplified U-Net for binary segmentation:
-      in:  (N, 1,   H, W)
+      in:  (N, 1,   H, W)   ++++ BX, BY, JZ
       out: (N, 1,   H, W)
     """
     def __init__(self, input_channels=1, base_channels=16):
@@ -238,7 +240,9 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     for batch in loader:
         psi, mask = batch["psi"].to(device), batch["mask"].to(device)
         pred = model(psi)
+
         loss = criterion(pred, mask)
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -255,6 +259,52 @@ def validate_one_epoch(model, loader, criterion, device):
             loss = criterion(pred, mask)
             val_loss += loss.item()
     return val_loss / len(loader)
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        """
+        Focal Loss implementation
+        
+        Parameters:
+        alpha (float): Weighting factor for the rare class (X-points), default=0.25
+        gamma (float): Focusing parameter that reduces the loss for well-classified examples, default=2.0
+        reduction (str): 'mean' or 'sum', how to reduce the loss over the batch
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        
+    def forward(self, inputs, targets):
+        """
+        inputs: Model predictions (logits, before sigmoid), shape [N, 1, H, W]
+        targets: Ground truth binary masks, shape [N, 1, H, W]
+        """
+        # Apply sigmoid to get probabilities
+        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        
+        # Get probabilities for positive class
+        probs = torch.sigmoid(inputs)
+        # For targets=1 (X-points), pt = p; for targets=0 (non-X-points), pt = 1-p
+        pt = torch.where(targets == 1, probs, 1 - probs)
+        
+        # Apply focusing parameter
+        focal_weight = (1 - pt) ** self.gamma
+        
+        # Apply alpha weighting: alpha for X-points, (1-alpha) for non-X-points
+        alpha_weight = torch.where(targets == 1, self.alpha, 1 - self.alpha)
+        
+        # Combine all factors
+        focal_loss = alpha_weight * focal_weight * bce_loss
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 # PLOTTING FUNCTION
 def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, filenameBase, interpFac,
@@ -310,6 +360,122 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, filenameBase, inte
 
     plt.close()
 
+def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, filenameBase, 
+                          outDir="plots", saveFig=True):
+    """
+    Visualize model performance comparing predictions with ground truth:
+    - True Positives (green)
+    - False Positives (red)
+    - False Negatives (yellow)
+    - Background shows psi contours
+    """
+    plt.figure(figsize=(12, 8))
+    
+    # Plot psi contours
+    if params["plotContours"]:
+        plt.rcParams["contour.negative_linestyle"] = "solid"
+        cs = plt.contour(
+            x / params["axesNorm"][0],
+            y / params["axesNorm"][1],
+            np.transpose(psi_np),          
+            params["numContours"],
+            colors='k',
+            linewidths=0.75
+        )
+    
+    # Make binary prediction
+    pred_bin = (pred_prob_np[0,0] > 0.5).astype(np.float32)
+    
+    # Find True Positives, False Positives, False Negatives
+    tp_mask = np.logical_and(pred_bin == 1, mask_gt == 1)
+    fp_mask = np.logical_and(pred_bin == 1, mask_gt == 0)
+    fn_mask = np.logical_and(pred_bin == 0, mask_gt == 1)
+    
+    # Plot each category
+    tp_rows, tp_cols = np.where(tp_mask)
+    fp_rows, fp_cols = np.where(fp_mask)
+    fn_rows, fn_cols = np.where(fn_mask)
+    
+    if len(tp_rows) > 0:
+        plt.plot(
+            x[tp_rows] / params["axesNorm"][0],
+            y[tp_cols] / params["axesNorm"][1],
+            'o', color='green', markersize=8, label="True Positives"
+        )
+    
+    if len(fp_rows) > 0:
+        plt.plot(
+            x[fp_rows] / params["axesNorm"][0],
+            y[fp_cols] / params["axesNorm"][1],
+            'o', color='red', markersize=8, label="False Positives"
+        )
+    
+    if len(fn_rows) > 0:
+        plt.plot(
+            x[fn_rows] / params["axesNorm"][0],
+            y[fn_cols] / params["axesNorm"][1],
+            'o', color='yellow', markersize=8, label="False Negatives"
+        )
+    
+    plt.xlabel(r"$x/d_i$")
+    plt.ylabel(r"$y/d_i$")
+    plt.legend(loc='best')
+    
+    if params["axisEqual"]:
+        plt.gca().set_aspect("equal", "box")
+    
+    # Calculate metrics
+    tp = np.sum(tp_mask)
+    fp = np.sum(fp_mask)
+    fn = np.sum(fn_mask)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    
+    plt.title(f"Model Performance, fileNum={fnum}\nPrecision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}")
+    
+    if saveFig:
+        basename = os.path.basename(filenameBase)
+        saveFilename = os.path.join(
+            outDir,
+            f"{basename}_model_performance_{fnum:04d}.png"
+        )
+        plt.savefig(saveFilename, dpi=300)
+        print("   Model performance figure written to", saveFilename)
+    
+    plt.close()
+
+def plot_training_history(train_losses, val_losses, save_path='output_images/training_history.png'):
+    """
+    Plots training and validation losses across epochs.
+    
+    Parameters:
+    train_losses (list): List of training losses for each epoch
+    val_losses (list): List of validation losses for each epoch
+    save_path (str): Path to save the resulting plot
+    """
+    plt.figure(figsize=(10, 6))
+    epochs = range(1, len(train_losses) + 1)
+    
+    plt.plot(epochs, train_losses, 'b-', label='Training Loss')
+    plt.plot(epochs, val_losses, 'r-', label='Validation Loss')
+    
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # Add some padding to y-axis to make visualization clearer
+    ymin = min(min(train_losses), min(val_losses)) * 0.9
+    ymax = max(max(train_losses), max(val_losses)) * 1.1
+    plt.ylim(ymin, ymax)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    print(f"Training history plot saved to {save_path}")
+    plt.close()
 
 def main():
     t0 = timer()
@@ -329,19 +495,23 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = UNet(input_channels=1, base_channels=16).to(device)
-    pos_weight = torch.tensor([2000.0], dtype=torch.float, device=device)   # Pos_weight: a tuning parameter, to add weight to X point so it becomes more evident
-    criterion  = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = FocalLoss(alpha=0.999, gamma=10)
 
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
+
+    train_loss = []
+    val_loss = []
     
     num_epochs = 50
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss   = validate_one_epoch(model, val_loader, criterion, device)
-        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss:.4f}  ValLoss={val_loss:.4f}")
+
+        
+        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss}  ValLoss={val_loss}")
 
     t3 = timer()
     print("time (s) to train model: " + str(t3-t2))
@@ -404,6 +574,13 @@ def main():
                 psi_np, x, y, params, fnum, filenameBase, interpFac,
                 xpoint_mask=np.squeeze(pred_mask_bin),
                 titleExtra="(CNN X-points)",
+                outDir=outDir,
+                saveFig=True
+            )
+
+            pred_prob_np_full = pred_prob.cpu().numpy()
+            plot_model_performance(
+                psi_np, pred_prob_np_full, mask_gt, x, y, params, fnum, filenameBase,
                 outDir=outDir,
                 saveFig=True
             )
