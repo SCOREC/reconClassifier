@@ -62,7 +62,6 @@ class XPointDataset(Dataset):
         # load all the data
         self.data = []
         for fnum in fnumList:
-            print("fnum " + str(fnum))
             self.data.append(self.load(fnum))
 
     def __len__(self):
@@ -70,18 +69,16 @@ class XPointDataset(Dataset):
 
     def __getitem__(self, idx):
         fnum = self.fnumList[idx]
-        print(f"[XPointDataset] Fetching fileNum = {fnum}")
         return self.data[idx]
 
     def load(self, fnum):
         t0 = timer()
-        print(f"[XPointDataset] Processing fileNum = {fnum}")
 
         # Initialize gkData object
-        interpFac   = 1
         useB        = 0
         varid       = "psi"
         tmp = gkData.gkData(self.paramFile, fnum, varid, self.params)
+        print("time (s) to read gkyl data from disk: " + str(timer()-t0))
 
         refSpeciesAxes  = 'ion'
         refSpeciesAxes2 = 'ion'
@@ -131,9 +128,11 @@ class XPointDataset(Dataset):
             f = psi;
             g = None
 
+        t2 = timer()
         # Indicies of critical points, X points, and O points (max and min)
         critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
         [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+        print("time (s) to find X and O points: " + str(timer()-t2))
 
         numC = np.shape(critPoints)[1]
         numX = np.shape(xpts)[0];
@@ -148,8 +147,7 @@ class XPointDataset(Dataset):
         psi_torch = torch.from_numpy(psi).float().unsqueeze(0)      # [1, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
-        t1 = timer()
-        print("time (s) to get gkyl data: " + str(t1-t0))
+        print("time (s) to load and process gkyl frame: " + str(timer()-t0))
 
         return {
             "fnum": fnum,
