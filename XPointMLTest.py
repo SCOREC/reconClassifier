@@ -479,8 +479,8 @@ def main():
     t0 = timer()
     paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
 
-    train_fnums = range(75, 101)  
-    val_fnums   = range(101, 106)  
+    train_fnums = range(1, 140)
+    val_fnums   = range(141, 150)
 
     train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1, interpFac=1, saveFig=1)
     val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1, interpFac=1, saveFig=1)
@@ -503,7 +503,7 @@ def main():
     train_loss = []
     val_loss = []
     
-    num_epochs = 50
+    num_epochs = 200
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss   = validate_one_epoch(model, val_loader, criterion, device)
