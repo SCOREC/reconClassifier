@@ -505,14 +505,17 @@ def main():
     
     num_epochs = 200
     for epoch in range(num_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss   = validate_one_epoch(model, val_loader, criterion, device)
+        train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
+        val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
+        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
 
-        
-        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss}  ValLoss={val_loss}")
+    print("time (s) to train model: " + str(timer()-t2))
 
-    t3 = timer()
-    print("time (s) to train model: " + str(t3-t2))
+    requiredLossDecreaseMagnitude = 3;
+    if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
+        print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
+              f"initial {train_loss[0]} final {train_loss[-1]} ... exiting")
+        return 1;
 
     # (D) Plotting after training
     model.eval()    # Find out what this means
