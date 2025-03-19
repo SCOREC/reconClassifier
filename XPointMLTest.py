@@ -495,7 +495,7 @@ def main():
     model = UNet(input_channels=1, base_channels=16).to(device)
     criterion = FocalLoss(alpha=0.999, gamma=10)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-2)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
