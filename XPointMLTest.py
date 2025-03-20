@@ -303,6 +303,42 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
+        
+
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1.0, eps=1e-7):
+        """
+        Dice Loss implementation for binary segmentation
+
+        Parameters:
+        smooth (float): Smoothing factor to avoid division by zero, default=1.0
+        eps (float): Small epsilon value to avoid numerical instability
+        """
+        super().__init__()
+        self.smooth = smooth
+        self.eps = eps
+
+    def forward(self, inputs, targets):
+        """
+        inputs: Model predictions (logits, before sigmoid), shape [N, 1, H, W]
+        targets: Ground truth binary masks, shape [N, 1, H, W]
+        """
+        # Apply sigmoid to get probabilities
+        inputs = torch.sigmoid(inputs)
+
+        # Flatten both inputs and targets
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+
+        # Calculate intersection and union
+        intersection = (inputs * targets).sum()
+        union = inputs.sum() + targets.sum()
+
+        # Calculate Dice coefficient
+        dice = (2. * intersection + self.smooth) / (union + self.smooth + self.eps)
+
+        # Return Dice loss (1 - Dice coefficient)
+        return 1.0 - dice
 
 # PLOTTING FUNCTION
 def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, filenameBase, interpFac,
