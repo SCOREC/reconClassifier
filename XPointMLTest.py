@@ -62,7 +62,6 @@ class XPointDataset(Dataset):
         # load all the data
         self.data = []
         for fnum in fnumList:
-            print("fnum " + str(fnum))
             self.data.append(self.load(fnum))
 
     def __len__(self):
@@ -70,18 +69,16 @@ class XPointDataset(Dataset):
 
     def __getitem__(self, idx):
         fnum = self.fnumList[idx]
-        print(f"[XPointDataset] Fetching fileNum = {fnum}")
         return self.data[idx]
 
     def load(self, fnum):
         t0 = timer()
-        print(f"[XPointDataset] Processing fileNum = {fnum}")
 
         # Initialize gkData object
-        interpFac   = 1
         useB        = 0
         varid       = "psi"
         tmp = gkData.gkData(self.paramFile, fnum, varid, self.params)
+        print("time (s) to read gkyl data from disk: " + str(timer()-t0))
 
         refSpeciesAxes  = 'ion'
         refSpeciesAxes2 = 'ion'
@@ -131,9 +128,11 @@ class XPointDataset(Dataset):
             f = psi;
             g = None
 
+        t2 = timer()
         # Indicies of critical points, X points, and O points (max and min)
         critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
         [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+        print("time (s) to find X and O points: " + str(timer()-t2))
 
         numC = np.shape(critPoints)[1]
         numX = np.shape(xpts)[0];
@@ -148,8 +147,7 @@ class XPointDataset(Dataset):
         psi_torch = torch.from_numpy(psi).float().unsqueeze(0)      # [1, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
-        t1 = timer()
-        print("time (s) to get gkyl data: " + str(t1-t0))
+        print("time (s) to load and process gkyl frame: " + str(timer()-t0))
 
         return {
             "fnum": fnum,
@@ -481,8 +479,8 @@ def main():
     t0 = timer()
     paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
 
-    train_fnums = range(75, 101)  
-    val_fnums   = range(101, 106)  
+    train_fnums = range(1, 140)
+    val_fnums   = range(141, 150)
 
     train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1, interpFac=1, saveFig=1)
     val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1, interpFac=1, saveFig=1)
@@ -497,7 +495,7 @@ def main():
     model = UNet(input_channels=1, base_channels=16).to(device)
     criterion = FocalLoss(alpha=0.999, gamma=10)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-2)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
@@ -505,16 +503,19 @@ def main():
     train_loss = []
     val_loss = []
     
-    num_epochs = 50
+    num_epochs = 200
     for epoch in range(num_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss   = validate_one_epoch(model, val_loader, criterion, device)
+        train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
+        val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
+        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
 
-        
-        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss}  ValLoss={val_loss}")
+    print("time (s) to train model: " + str(timer()-t2))
 
-    t3 = timer()
-    print("time (s) to train model: " + str(t3-t2))
+    requiredLossDecreaseMagnitude = 3;
+    if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
+        print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
+              f"initial {train_loss[0]} final {train_loss[-1]} ... exiting")
+        return 1;
 
     # (D) Plotting after training
     model.eval()    # Find out what this means
