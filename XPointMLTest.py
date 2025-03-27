@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from pathlib import Path
+import sys
+import argparse
 
 from utils import gkData
 from utils import auxFuncs
@@ -25,7 +28,8 @@ class XPointDataset(Dataset):
       - Finds X-points -> builds a 2D binary mask.
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
-    def __init__(self, paramFile, fnumList, constructJz=1, interpFac=1, saveFig=1):
+    def __init__(self, paramFile, fnumList, constructJz=1, interpFac=1,
+            saveFig=1, xptCacheDir=None):
         """
         paramFile:   Path to parameter file (string).
         fnumList:    List of frames to iterate. 
@@ -39,6 +43,7 @@ class XPointDataset(Dataset):
         self.constructJz = constructJz
         self.interpFac   = interpFac
         self.saveFig     = saveFig
+        self.xptCacheDir = xptCacheDir
 
         # We'll store a base 'params' once here, and then customize in __getitem__:
         self.params = {}
@@ -73,6 +78,13 @@ class XPointDataset(Dataset):
 
     def load(self, fnum):
         t0 = timer()
+
+        # check if cache exists
+        if self.xptCacheDir != None:
+          if not self.xptCacheDir.is_dir():
+              print(f"Xpoint cache directory {self.xptCacheDir} does not exist...  exiting")
+              sys.exit()
+
 
         # Initialize gkData object
         useB        = 0
@@ -130,8 +142,24 @@ class XPointDataset(Dataset):
 
         t2 = timer()
         # Indicies of critical points, X points, and O points (max and min)
-        critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
-        [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+        if self.xptCacheDir == None:
+          critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
+          [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+        else:
+          cachedFrame = self.xptCacheDir / f"{fnum}_xpts.npy"
+          if not cachedFrame.exists():
+            critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
+            [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+            np.save(self.xptCacheDir / f"{fnum}_critPts.npy",critPoints)
+            np.save(self.xptCacheDir / f"{fnum}_xpts.npy",xpts)
+            np.save(self.xptCacheDir / f"{fnum}_optsMax.npy",optsMax)
+            np.save(self.xptCacheDir / f"{fnum}_optsMin.npy",optsMin)
+          else:
+            critPoints = np.load(self.xptCacheDir / f"{fnum}_critPts.npy")
+            xpts = np.load(self.xptCacheDir / f"{fnum}_xpts.npy")
+            optsMax = np.load(self.xptCacheDir / f"{fnum}_optsMax.npy")
+            optsMin = np.load(self.xptCacheDir / f"{fnum}_optsMin.npy")
+
         print("time (s) to find X and O points: " + str(timer()-t2))
 
         numC = np.shape(critPoints)[1]
@@ -512,14 +540,24 @@ def plot_training_history(train_losses, val_losses, save_path='output_images/tra
     plt.close()
 
 def main():
+    parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
+    parser.add_argument('--xptCacheDir', type=Path, default=None,
+            help='''
+            specify the path to a directory that will be used to cache
+            the outputs of the analytic Xpoint finder
+            ''')
+    args = parser.parse_args()
+
     t0 = timer()
     paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
 
     train_fnums = range(1, 140)
     val_fnums   = range(141, 150)
 
-    train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1, interpFac=1, saveFig=1)
-    val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1, interpFac=1, saveFig=1)
+    train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1,
+            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
+    val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1,
+            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
