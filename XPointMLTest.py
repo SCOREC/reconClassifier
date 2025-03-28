@@ -15,6 +15,49 @@ from torch.utils.data import DataLoader, Dataset
 
 from timeit import default_timer as timer
 
+# from torch_lr_finder import LRFinder
+
+
+def expand_xpoints_mask(binary_mask, kernel_size=9):
+    """
+    Expands each X-point in a binary mask to include surrounding cells
+    in a square grid of size kernel_size x kernel_size.
+    
+    Parameters:
+    binary_mask : numpy.ndarray
+        2D binary mask with 1s at X-point locations
+    kernel_size : int
+        Size of the square grid (must be odd number)
+        
+    Returns:
+    numpy.ndarray
+        Expanded binary mask with 1s in kernel_size×kernel_size regions around X-points
+    """
+    
+    # Get shape of the original mask
+    h, w = binary_mask.shape
+    
+    # Create a copy to avoid modifying the original
+    expanded_mask = np.zeros_like(binary_mask)
+    
+    # Find coordinates of all X-points
+    x_points = np.argwhere(binary_mask > 0)
+    
+    # For each X-point, set a kernel_size×kernel_size area to 1
+    half_size = kernel_size // 2
+    for point in x_points:
+        # Get the corner coordinates for the square centered at the X-point
+        x_min = max(0, point[0] - half_size)
+        x_max = min(h, point[0] + half_size + 1)
+        y_min = max(0, point[1] - half_size)
+        y_max = min(w, point[1] + half_size + 1)
+        
+        # Set the square area to 1
+        expanded_mask[x_min:x_max, y_min:y_max] = 1
+    
+    return expanded_mask
+
+
 # DATASET DEFINITION
 class XPointDataset(Dataset):
     """
@@ -143,6 +186,8 @@ class XPointDataset(Dataset):
         binaryMap = np.zeros(np.shape(f));
         binaryMap[xpts[:, 0], xpts[:, 1]] = 1
 
+        binaryMap = expand_xpoints_mask(binaryMap, kernel_size=9)
+
         # -------------- 6) Convert to Torch Tensors --------------
         psi_torch = torch.from_numpy(psi).float().unsqueeze(0)      # [1, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
@@ -152,7 +197,7 @@ class XPointDataset(Dataset):
         return {
             "fnum": fnum,
             "psi": psi_torch,        # shape [1, Nx, Ny]
-            "mask": mask_torch,      # shape [1, Nx, Ny]    // Maybe redundant, 
+            "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
             "psi_np": psi,           # 2D np array [Nx, Ny]
             "mask_np": binaryMap,    # 2D np array [Nx, Ny]
             "x": x,
@@ -243,6 +288,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
         optimizer.zero_grad()
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running_loss += loss.item()
     return running_loss / len(loader)
@@ -326,7 +372,6 @@ class DiceLoss(nn.Module):
         # Apply sigmoid to get probabilities
         inputs = torch.sigmoid(inputs)
 
-        # Flatten both inputs and targets
         inputs = inputs.view(-1)
         targets = targets.view(-1)
 
@@ -511,12 +556,53 @@ def plot_training_history(train_losses, val_losses, save_path='output_images/tra
     print(f"Training history plot saved to {save_path}")
     plt.close()
 
+def find_optimal_lr(model, train_loader, criterion, device, plot_path='output_images/lr_finder.png'):
+    """
+    Finds the optimal learning rate using the LR Finder.
+    
+    Parameters:
+    model (nn.Module): The neural network model
+    train_loader (DataLoader): DataLoader for the training set
+    criterion: Loss function
+    device: Device to run the model on (cpu or cuda)
+    plot_path (str): Path to save the lr finder plot
+    
+    Returns:
+    float: Suggested learning rate
+    """
+    print("Running Learning Rate Finder...")
+    
+    # Create optimizer with a very low learning rate
+    optimizer = optim.Adam(model.parameters(), lr=1e-8)
+    
+    # Create the LR Finder
+    lr_finder = LRFinder(model, optimizer, criterion, device=device)
+    
+    # Run the LR Finder
+    lr_finder.range_test(train_loader, end_lr=1, num_iter=100)
+    
+    # Get the suggested learning rate
+    suggested_lr = lr_finder.history['lr'][lr_finder.history['loss'].index(lr_finder.best_loss)]
+    
+    # Plot the results
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    lr_finder.plot(log_lr=True, skip_start=0, skip_end=0)
+    plt.title("Learning Rate Finder Results")
+    plt.savefig(plot_path, dpi=300)
+    plt.close()
+    
+    # Reset the model parameters
+    lr_finder.reset()
+    
+    print(f"Learning Rate Finder complete. Suggested LR: {suggested_lr:.2e}")
+    return suggested_lr
+
 def main():
     t0 = timer()
     paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
 
-    train_fnums = range(1, 140)
-    val_fnums   = range(141, 150)
+    train_fnums = range(75, 81)
+    val_fnums   = range(101, 105)
 
     train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1, interpFac=1, saveFig=1)
     val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1, interpFac=1, saveFig=1)
@@ -529,17 +615,42 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = UNet(input_channels=1, base_channels=16).to(device)
-    criterion = FocalLoss(alpha=0.999, gamma=10)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-2)
+    # def init_final_layer(m):
+    #         if isinstance(m, nn.Conv2d):
+    #             nn.init.xavier_uniform_(m.weight, gain=0.01)  # Much smaller weights
+    #             if m.bias is not None:
+    #                 # If X-points are 0.003% of pixels, use:
+    #                 # log(0.001/(1-0.001)) ≈ -6.9
+    #                 nn.init.constant_(m.bias, -3.398)  # Adjust based on true X-point frequency
+
+    # # Apply only to final layer
+    # model.out_conv.apply(init_final_layer)
+    
+    criterion = DiceLoss(smooth=1.0)
+
+    outDir = "output_images"
+    os.makedirs(outDir, exist_ok=True)
+
+    
+    # optimal_lr = find_optimal_lr(model, train_loader, criterion, device)
+    # lr = optimal_lr * 0.1
+    # print(f"Using learning rate: {lr:.2e}")
+
+    optimizer = optim.Adam(model.parameters(), lr=1e-5)
+
+    
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
 
     train_loss = []
     val_loss = []
+
+    full_fnums = list(train_fnums) + list(val_fnums)
+    full_dataset = [train_dataset, val_dataset]
     
-    num_epochs = 200
+    num_epochs = 2000
     for epoch in range(num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
@@ -547,21 +658,17 @@ def main():
 
     print("time (s) to train model: " + str(timer()-t2))
 
-    requiredLossDecreaseMagnitude = 3;
-    if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
-        print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
-              f"initial {train_loss[0]} final {train_loss[-1]} ... exiting")
-        return 1;
+    # requiredLossDecreaseMagnitude = 3;
+    # if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
+    #     print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
+    #           f"initial {train_loss[0]} final {train_loss[-1]} ... exiting")
+    #     return 1;
 
     # (D) Plotting after training
-    model.eval()    # Find out what this means
-    outDir = "output_images"
-    os.makedirs(outDir, exist_ok=True)
+    model.eval() 
     interpFac = 1  
 
     # Evaluate on combined set for demonstration. Exam this part to see if save to remove
-    full_fnums = list(train_fnums) + list(val_fnums)
-    full_dataset = [train_dataset, val_dataset]
 
     t4 = timer()
 
