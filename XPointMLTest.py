@@ -223,8 +223,6 @@ class XPointDataset(Dataset):
             "fnum": fnum,
             "psi": psi_torch,        # shape [1, Nx, Ny]
             "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
-            "psi_np": psi,           # 2D np array [Nx, Ny]
-            "mask_np": binaryMap,    # 2D np array [Nx, Ny]
             "x": x,
             "y": y,
             "filenameBase": tmp.filenameBase, 
@@ -696,8 +694,8 @@ def main():
         for item in set:
             # item is a dict with keys: fnum, psi, mask, psi_np, mask_np, x, y, tmp, params
             fnum     = item["fnum"]
-            psi_np   = item["psi_np"]
-            mask_gt  = item["mask_np"]
+            psi_np   = np.array(item["psi"])[0]
+            mask_gt  = np.array(item["mask"])[0]
             x        = item["x"]
             y        = item["y"]
             filenameBase      = item["filenameBase"]
