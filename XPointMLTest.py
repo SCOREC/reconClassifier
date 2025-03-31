@@ -57,6 +57,19 @@ def expand_xpoints_mask(binary_mask, kernel_size=9):
     
     return expanded_mask
 
+def rotate(frameData,deg):
+    if deg not in [90, 180, 270]:
+        print(f"invalid rotation specified... exiting")
+        sys.exit()
+    psi = frameData["psi"]
+    shape = psi.shape
+    if shape[1] != shape[2]:
+        print(f"input data must be square... exiting")
+        sys.exit()
+    frameData["psi"] = np.rot90(frameData["psi"][0], deg/90).reshape(shape)
+    frameData["mask"] = np.rot90(frameData["mask"][0], deg/90).reshape(shape)
+    return frameData
+
 
 # DATASET DEFINITION
 class XPointDataset(Dataset):
@@ -107,7 +120,13 @@ class XPointDataset(Dataset):
         # load all the data
         self.data = []
         for fnum in fnumList:
-            self.data.append(self.load(fnum))
+            frameData = self.load(fnum)
+            self.data.append(frameData)
+            self.data.append(rotate(frameData,90))
+#            self.data.append(rotate(frameData,180))
+#            self.data.append(rotate(frameData,270))
+#            self.data.append(reflect(frameData,0))
+#            self.data.append(reflect(frameData,1))
 
     def __len__(self):
         return len(self.fnumList)
