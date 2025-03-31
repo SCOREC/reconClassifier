@@ -129,7 +129,7 @@ class XPointDataset(Dataset):
         # Initialize gkData object
         useB        = 0
         varid       = "psi"
-        tmp = gkData.gkData(self.paramFile, fnum, varid, self.params)
+        tmp = gkData.gkData(str(self.paramFile), fnum, varid, self.params)
         print("time (s) to read gkyl data from disk: " + str(timer()-t0))
 
         refSpeciesAxes  = 'ion'
@@ -151,7 +151,7 @@ class XPointDataset(Dataset):
         self.params["timeNorm"] = tmp.omegaC[speciesIndexTime]
         self.params["axesLabels"] = ['$x/d_i$', '$y/d_i$', '$z/d_p$']
 
-        varPsi = gkData.gkData(self.paramFile, fnum, 'psi', self.params).compactRead()
+        varPsi = gkData.gkData(str(self.paramFile), fnum, 'psi', self.params).compactRead()
         psi_raw = varPsi.data
         coords0 = varPsi.coords
 
@@ -580,24 +580,59 @@ def plot_training_history(train_losses, val_losses, save_path='output_images/tra
     print(f"Training history plot saved to {save_path}")
     plt.close()
 
-def main():
+def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
+    parser.add_argument('--epochs', type=int, default=2000,
+            help='specify the number of epochs')
+    parser.add_argument('--trainFrameFirst', type=int, default=1,
+            help='specify the number of the first frame used for training')
+    parser.add_argument('--trainFrameLast', type=int, default=140,
+            help='specify the number of the last frame used for training')
+    parser.add_argument('--validationFrameFirst', type=int, default=141,
+            help='specify the number of the first frame used for validation')
+    parser.add_argument('--validationFrameLast', type=int, default=150,
+            help='specify the number of the last frame used for validation')
+    parser.add_argument('--paramFile', type=Path, default=None,
+            help='''
+            specify the path to the parameter txt file, the parent
+            directory of that file must contain the gkyl input training data
+            ''')
     parser.add_argument('--xptCacheDir', type=Path, default=None,
             help='''
             specify the path to a directory that will be used to cache
             the outputs of the analytic Xpoint finder
             ''')
     args = parser.parse_args()
+    return args
+
+def checkCommandLineArgs(args):
+    if args.xptCacheDir != None:
+      if not args.xptCacheDir.is_dir():
+          print(f"Xpoint cache directory {args.xptCacheDir} does not exist. "
+                 "Please create the directory... exiting")
+          sys.exit()
+
+    if args.paramFile == None:
+      print(f"parameter file required but not set... exiting")
+      sys.exit()
+    if args.paramFile.is_dir():
+      print(f"parameter file {args.paramFile} is a directory ... exiting")
+      sys.exit()
+    if not args.paramFile.exists():
+      print(f"parameter file {args.paramFile} does not exist... exiting")
+      sys.exit()
+
+def main():
+    args = parseCommandLineArgs()
+    checkCommandLineArgs(args)
 
     t0 = timer()
-    paramFile = '/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt'
+    train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
+    val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
-    train_fnums = range(1, 140)
-    val_fnums   = range(141, 150)
-
-    train_dataset = XPointDataset(paramFile, train_fnums, constructJz=1,
+    train_dataset = XPointDataset(args.paramFile, train_fnums, constructJz=1,
             interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
-    val_dataset   = XPointDataset(paramFile, val_fnums,   constructJz=1,
+    val_dataset   = XPointDataset(args.paramFile, val_fnums,   constructJz=1,
             interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
 
     t1 = timer()
