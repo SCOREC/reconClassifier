@@ -590,6 +590,8 @@ def parseCommandLineArgs():
             help='specify the number of the first frame used for validation')
     parser.add_argument('--validationFrameLast', type=int, default=150,
             help='specify the number of the last frame (exclusive) used for validation')
+    parser.add_argument('--minTrainingLoss', type=int, default=3,
+            help='minimum reduction in training loss in orders of magnitude')
     parser.add_argument('--paramFile', type=Path, default=None,
             help='''
             specify the path to the parameter txt file, the parent
@@ -632,6 +634,10 @@ def checkCommandLineArgs(args):
       print(f"validation frame range isn't valid... exiting")
       sys.exit()
 
+    if args.minTrainingLoss < 0:
+      print(f"minTrainingLoss must be >= 0... exiting")
+      sys.exit()
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
@@ -671,7 +677,7 @@ def main():
 
     print("time (s) to train model: " + str(timer()-t2))
 
-    requiredLossDecreaseMagnitude = 3;
+    requiredLossDecreaseMagnitude = args.minTrainingLoss
     if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
         print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
               f"initial {train_loss[0]} final {train_loss[-1]} ... exiting")
