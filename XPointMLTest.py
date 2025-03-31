@@ -665,7 +665,7 @@ def main():
     train_loss = []
     val_loss = []
     
-    num_epochs = 2000
+    num_epochs = args.epochs
     for epoch in range(num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
