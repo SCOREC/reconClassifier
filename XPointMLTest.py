@@ -587,11 +587,11 @@ def parseCommandLineArgs():
     parser.add_argument('--trainFrameFirst', type=int, default=1,
             help='specify the number of the first frame used for training')
     parser.add_argument('--trainFrameLast', type=int, default=140,
-            help='specify the number of the last frame used for training')
+            help='specify the number of the last frame (exclusive) used for training')
     parser.add_argument('--validationFrameFirst', type=int, default=141,
             help='specify the number of the first frame used for validation')
     parser.add_argument('--validationFrameLast', type=int, default=150,
-            help='specify the number of the last frame used for validation')
+            help='specify the number of the last frame (exclusive) used for validation')
     parser.add_argument('--paramFile', type=Path, default=None,
             help='''
             specify the path to the parameter txt file, the parent
@@ -620,6 +620,18 @@ def checkCommandLineArgs(args):
       sys.exit()
     if not args.paramFile.exists():
       print(f"parameter file {args.paramFile} does not exist... exiting")
+      sys.exit()
+
+    if args.trainFrameFirst == 0 or args.validationFrameFirst == 0:
+      print(f"frame 0 does not contain valid data... exiting")
+      sys.exit()
+
+    if args.trainFrameLast <= args.trainFrameFirst:
+      print(f"training frame range isn't valid... exiting")
+      sys.exit()
+
+    if args.validationFrameLast <= args.validationFrameFirst:
+      print(f"validation frame range isn't valid... exiting")
       sys.exit()
 
 def main():
