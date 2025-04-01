@@ -715,6 +715,7 @@ def main():
 
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=1e-5)
+    torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.96, verbose=True)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
