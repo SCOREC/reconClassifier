@@ -68,6 +68,25 @@ def rotate(frameData,deg):
     return {
         "fnum": frameData["fnum"],
         "rotation": deg,
+        "reflectionAxis": -1, # no reflection
+        "psi": psi,
+        "mask": mask,
+        "x": frameData["x"],
+        "y": frameData["y"],
+        "filenameBase": frameData["filenameBase"],
+        "params": frameData["params"]
+    }
+
+def reflect(frameData,axis):
+    if axis not in [0,1]:
+        print(f"invalid reflection axis specified... exiting")
+        sys.exit()
+    psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
+    mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
+    return {
+        "fnum": frameData["fnum"],
+        "rotation": 0,
+        "reflectionAxis": axis,
         "psi": psi,
         "mask": mask,
         "x": frameData["x"],
@@ -127,6 +146,8 @@ class XPointDataset(Dataset):
             self.data.append(rotate(frameData,90))
             self.data.append(rotate(frameData,180))
             self.data.append(rotate(frameData,270))
+            self.data.append(reflect(frameData,0))
+            self.data.append(reflect(frameData,1))
 
     def __len__(self):
         return len(self.data)
@@ -240,6 +261,7 @@ class XPointDataset(Dataset):
         return {
             "fnum": fnum,
             "rotation": 0,
+            "reflectionAxis": -1, # no reflection
             "psi": psi_torch,        # shape [1, Nx, Ny]
             "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
             "x": x,
@@ -427,7 +449,8 @@ class DiceLoss(nn.Module):
         return 1.0 - dice
 
 # PLOTTING FUNCTION
-def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation, filenameBase, interpFac,
+def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
+        reflectionAxis, filenameBase, interpFac,
                                   xpoint_mask=None, 
                                   titleExtra="",
                                   outDir="plots", 
@@ -455,7 +478,8 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation, filename
     if params["axisEqual"]:
         plt.gca().set_aspect("equal", "box")
 
-    plt.title(f"Vector Potential Contours {titleExtra}, fileNum={fnum}, rotation={rotation}")
+    plt.title(f"Vector Potential Contours {titleExtra}, fileNum={fnum}, "
+              f"reflectionAxis={reflectionAxis}")
 
     # Overlay X-points if xpoint_mask is given
     if xpoint_mask is not None:
@@ -473,7 +497,7 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation, filename
         basename = os.path.basename(filenameBase)
         saveFilename = os.path.join(
             outDir,
-            f"{basename}_interpFac_{interpFac}_frame{fnum:04d}_rotation{rotation}_{titleExtra.replace(' ','_')}.png"
+            f"{basename}_interpFac_{interpFac}_frame{fnum:04d}_rotation{rotation}_reflection{reflectionAxis}_{titleExtra.replace(' ','_')}.png"
         )
         plt.savefig(saveFilename, dpi=300)
         print("   Figure written to", saveFilename)
@@ -728,6 +752,7 @@ def main():
             # item is a dict with keys: fnum, psi, mask, psi_np, mask_np, x, y, tmp, params
             fnum     = item["fnum"]
             rotation = item["rotation"]
+            reflectionAxis = item["reflectionAxis"]
             psi_np   = np.array(item["psi"])[0]
             mask_gt  = np.array(item["mask"])[0]
             x        = item["x"]
@@ -747,7 +772,7 @@ def main():
 
             pred_mask_bin = (pred_prob_np > 0.5).astype(np.float32)  # Thresholding at 0.5, can be fine tune
 
-            print(f"Frame {fnum} rotation {rotation}:")
+            print(f"Frame {fnum} rotation {rotation} reflectionAxis {reflectionAxis}:")
             print(f"psi shape: {psi_np.shape}, min: {psi_np.min()}, max: {psi_np.max()}")
             print(f"pred_bin shape: {pred_bin.shape}, min: {pred_bin.min()}, max: {pred_bin.max()}")
             print(f"  Logits - min: {pred_mask_np.min():.5f}, max: {pred_mask_np.max():.5f}, mean: {pred_mask_np.mean():.5f}")
@@ -758,7 +783,7 @@ def main():
             if args.plot :
               # Plot GROUND TRUTH
               plot_psi_contours_and_xpoints(
-                  psi_np, x, y, params, fnum, rotation, filenameBase, interpFac,
+                  psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
                   xpoint_mask=mask_gt,
                   titleExtra="GTXpoints",
                   outDir=outDir,
@@ -767,7 +792,7 @@ def main():
 
               # Plot CNN PREDICTIONS
               plot_psi_contours_and_xpoints(
-                  psi_np, x, y, params, fnum, rotation, filenameBase, interpFac,
+                  psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
                   xpoint_mask=np.squeeze(pred_mask_bin),
                   titleExtra="CNNXpoints",
                   outDir=outDir,
