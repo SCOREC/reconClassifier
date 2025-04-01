@@ -568,7 +568,7 @@ def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, fi
     
     plt.close()
 
-def plot_training_history(train_losses, val_losses, save_path='output_images/training_history.png'):
+def plot_training_history(train_losses, val_losses, save_path='plots/training_history.png'):
     """
     Plots training and validation losses across epochs.
     
