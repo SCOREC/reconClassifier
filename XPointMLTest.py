@@ -118,9 +118,6 @@ class XPointDataset(Dataset):
         self.params["symBar"]       = 1
         self.params["colormap"]     = 'bwr'
 
-        # output directory:
-        self.outDir = "plots"
-        os.makedirs(self.outDir, exist_ok=True)
 
         # load all the data
         self.data = []
@@ -626,6 +623,8 @@ def parseCommandLineArgs():
             ''')
     parser.add_argument('--plot', type=bool, default=False,
             help='create figures of the ground truth X-points and model identified X-points')
+    parser.add_argument('--plotDir', type=Path, default="./plots",
+            help='directory where figures are written')
     args = parser.parse_args()
     return args
 
@@ -665,6 +664,10 @@ def checkCommandLineArgs(args):
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
+
+    # output directory:
+    outDir = args.plotDir
+    os.makedirs(outDir, exist_ok=True)
 
     t0 = timer()
     train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
@@ -710,8 +713,7 @@ def main():
 
     # (D) Plotting after training
     model.eval() 
-    outDir = "output_images"
-    os.makedirs(outDir, exist_ok=True)
+    outDir = "plots"
     interpFac = 1  
 
     # Evaluate on combined set for demonstration. Exam this part to see if save to remove
