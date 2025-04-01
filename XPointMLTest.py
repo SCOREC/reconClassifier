@@ -106,7 +106,7 @@ class XPointDataset(Dataset):
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
     def __init__(self, paramFile, fnumList, constructJz=1, interpFac=1,
-            saveFig=1, xptCacheDir=None):
+            saveFig=1, xptCacheDir=None, rotateAndReflect=False):
         """
         paramFile:   Path to parameter file (string).
         fnumList:    List of frames to iterate. 
@@ -143,11 +143,12 @@ class XPointDataset(Dataset):
         for fnum in fnumList:
             frameData = self.load(fnum)
             self.data.append(frameData)
-            self.data.append(rotate(frameData,90))
-            self.data.append(rotate(frameData,180))
-            self.data.append(rotate(frameData,270))
-            self.data.append(reflect(frameData,0))
-            self.data.append(reflect(frameData,1))
+            if rotateAndReflect:
+              self.data.append(rotate(frameData,90))
+              self.data.append(rotate(frameData,180))
+              self.data.append(rotate(frameData,270))
+              self.data.append(reflect(frameData,0))
+              self.data.append(reflect(frameData,1))
 
     def __len__(self):
         return len(self.data)
@@ -698,7 +699,8 @@ def main():
     val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
     train_dataset = XPointDataset(args.paramFile, train_fnums, constructJz=1,
-            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
+            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir,
+            rotateAndReflect=True)
     val_dataset   = XPointDataset(args.paramFile, val_fnums,   constructJz=1,
             interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
 
