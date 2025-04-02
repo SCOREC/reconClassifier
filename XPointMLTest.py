@@ -706,6 +706,8 @@ def main():
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
+    print(f"number of training frames (original + augmented): {len(train_dataset)}")
+    print(f"number of validation frames: {len(val_dataset)}")
 
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
     val_loader   = DataLoader(val_dataset,   batch_size=1, shuffle=False)
