@@ -648,7 +648,7 @@ def parseCommandLineArgs():
             specify the path to a directory that will be used to cache
             the outputs of the analytic Xpoint finder
             ''')
-    parser.add_argument('--plot', type=bool, default=False,
+    parser.add_argument('--plot', action='store_false',
             help='create figures of the ground truth X-points and model identified X-points')
     parser.add_argument('--plotDir', type=Path, default="./plots",
             help='directory where figures are written')
