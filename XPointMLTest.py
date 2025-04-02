@@ -624,6 +624,8 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
 
 def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
+    parser.add_argument('--learningRate', type=float, default=1e-5,
+            help='specify the learning rate')
     parser.add_argument('--epochs', type=int, default=2000,
             help='specify the number of epochs')
     parser.add_argument('--trainFrameFirst', type=int, default=1,
@@ -682,13 +684,24 @@ def checkCommandLineArgs(args):
       print(f"validation frame range isn't valid... exiting")
       sys.exit()
 
+    if args.learningRate <= 0:
+      print(f"learningRate must be > 0... exiting")
+      sys.exit()
+
     if args.minTrainingLoss < 0:
       print(f"minTrainingLoss must be >= 0... exiting")
       sys.exit()
 
+def printCommandLineArgs(args):
+    print("Config {")
+    for arg in vars(args):
+        print(f"  {arg}: {getattr(args, arg)}")
+    print("}")
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
+    printCommandLineArgs(args)
 
     # output directory:
     outDir = args.plotDir
@@ -716,7 +729,7 @@ def main():
     model = UNet(input_channels=1, base_channels=16).to(device)
 
     criterion = DiceLoss(smooth=1.0)
-    optimizer = optim.Adam(model.parameters(), lr=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
