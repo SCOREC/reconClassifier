@@ -717,6 +717,7 @@ def main():
 
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=1e-5)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.96)
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
@@ -728,7 +729,10 @@ def main():
     for epoch in range(num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
-        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
+        lr = scheduler.get_last_lr()
+        scheduler.step() # update lr with gamma
+        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} "
+              f"ValLoss={val_loss[-1]} LearningRate {lr}")
 
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
