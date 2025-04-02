@@ -728,6 +728,7 @@ def main():
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
         lr = scheduler.get_last_lr()
+        scheduler.step() # update lr with gamma
         print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} "
               f"ValLoss={val_loss[-1]} LearningRate {lr}")
 
