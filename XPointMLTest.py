@@ -626,6 +626,8 @@ def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
     parser.add_argument('--learningRate', type=float, default=1e-5,
             help='specify the learning rate')
+    parser.add_argument('--batchSize', type=int, default=1,
+            help='specify the batch size')
     parser.add_argument('--epochs', type=int, default=2000,
             help='specify the number of epochs')
     parser.add_argument('--trainFrameFirst', type=int, default=1,
@@ -688,6 +690,10 @@ def checkCommandLineArgs(args):
       print(f"learningRate must be > 0... exiting")
       sys.exit()
 
+    if args.batchSize < 1:
+      print(f"batchSize must be >= 1... exiting")
+      sys.exit()
+
     if args.minTrainingLoss < 0:
       print(f"minTrainingLoss must be >= 0... exiting")
       sys.exit()
@@ -722,8 +728,8 @@ def main():
     print(f"number of training frames (original + augmented): {len(train_dataset)}")
     print(f"number of validation frames: {len(val_dataset)}")
 
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
-    val_loader   = DataLoader(val_dataset,   batch_size=1, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=False)
+    val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = UNet(input_channels=1, base_channels=16).to(device)
