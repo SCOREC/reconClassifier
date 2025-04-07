@@ -95,31 +95,61 @@ def reflect(frameData,axis):
         "params": frameData["params"]
     }
 
+def getPgkylData(paramFile, frameNumber, verbosity):
+  if verbosity > 0:
+    print(f"=== frame {frameNumber} ===")
+  params = {} #Initialize dictionary to store plotting and other parameters
+  params["polyOrderOverride"] = 0 #Override default dg interpolation and interpolate to given number of points
+  constrcutBandJ = 1
+  #Read vector potential
+  var = gkData.gkData(str(paramFile),frameNumber,'psi',params).compactRead()
+  psi = var.data
+  coords = var.coords
+  axesNorm = var.d[ var.speciesFileIndex.index('ion') ]
+  if verbosity > 0:
+    print(f"psi shape: {psi.shape}, min={psi.min()}, max={psi.max()}")
+  #Construct B and J (first and second derivatives)
+  [df_dx,df_dy,df_dz] = auxFuncs.genGradient(psi,var.dx)
+  [d2f_dxdx,d2f_dxdy,d2f_dxdz] = auxFuncs.genGradient(df_dx,var.dx)
+  [d2f_dydx,d2f_dydy,d2f_dydz] = auxFuncs.genGradient(df_dy,var.dx)
+  bx = df_dy
+  by = -df_dx
+  jz = -(d2f_dxdx + d2f_dydy) / var.mu0
+  del df_dx,df_dy,df_dz,d2f_dxdx,d2f_dxdy,d2f_dxdz,d2f_dydx,d2f_dydy,d2f_dydz
+  #Indicies of critical points, X points, and O points (max and min)
+  critPoints = auxFuncs.getCritPoints(psi)
+  [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(psi, critPoints)
+  return [var.filenameBase, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz]
+
+def cachedPgkylDataExists(cacheDir, frameNumber, fieldName):
+  if cacheDir == None:
+     return False
+  else:
+     cachedFrame = cacheDir / f"{frameNumber}_{fieldName}.npy"
+     return cachedFrame.exists();
+
+def writePgkylDataToCache(cacheDir, frameNumber, fields):
+  if cacheDir != None:
+     for name, field in fields.items():
+       np.save(cacheDir / f"{frameNumber}_{name}.npy",field)
+
 # DATASET DEFINITION
 class XPointDataset(Dataset):
     """
     Dataset that processes frames in [fnumList]. For each frame (fnum):
       - Sets up "params" according to your snippet.
-      - Reads psi from gkData (varid='psi'), possibly jz if needed.
-      - Interpolates if interpFac>1.
+      - Reads psi from gkData (varid='psi')
       - Finds X-points -> builds a 2D binary mask.
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
-    def __init__(self, paramFile, fnumList, constructJz=1, interpFac=1,
-            saveFig=1, xptCacheDir=None, rotateAndReflect=False):
+    def __init__(self, paramFile, fnumList, xptCacheDir=None, rotateAndReflect=False):
         """
         paramFile:   Path to parameter file (string).
         fnumList:    List of frames to iterate. 
-        constructJz: Whether to compute jz from second derivatives or load from gkData.
-        interpFac:   Interpolation factor for FFT-based upsampling.
-        saveFig:     If True, we might save intermediate plots (optional).
         """
         super().__init__()
         self.paramFile   = paramFile
         self.fnumList    = list(fnumList)  # ensure indexable
-        self.constructJz = constructJz
-        self.interpFac   = interpFac
-        self.saveFig     = saveFig
         self.xptCacheDir = xptCacheDir
 
         # We'll store a base 'params' once here, and then customize in __getitem__:
@@ -164,91 +194,25 @@ class XPointDataset(Dataset):
           if not self.xptCacheDir.is_dir():
               print(f"Xpoint cache directory {self.xptCacheDir} does not exist...  exiting")
               sys.exit()
-
-
-        # Initialize gkData object
-        useB        = 0
-        varid       = "psi"
-        tmp = gkData.gkData(str(self.paramFile), fnum, varid, self.params)
-        print("time (s) to read gkyl data from disk: " + str(timer()-t0))
-
-        refSpeciesAxes  = 'ion'
-        refSpeciesAxes2 = 'ion'
-        refSpeciesTime  = 'ion'
-
-        speciesIndexAxes  = tmp.speciesFileIndex.index(refSpeciesAxes)
-        speciesIndexAxes2 = tmp.speciesFileIndex.index(refSpeciesAxes2)
-        speciesIndexTime  = tmp.speciesFileIndex.index(refSpeciesTime)
-
-        # Overwrite these normalizations in params per-frame
-        self.params["axesNorm"] = [
-            tmp.d[speciesIndexAxes],
-            tmp.d[speciesIndexAxes],
-            tmp.vt[speciesIndexAxes2],
-            tmp.vt[speciesIndexAxes2],
-            tmp.vt[speciesIndexAxes2]
-        ]
-        self.params["timeNorm"] = tmp.omegaC[speciesIndexTime]
-        self.params["axesLabels"] = ['$x/d_i$', '$y/d_i$', '$z/d_p$']
-
-        varPsi = gkData.gkData(str(self.paramFile), fnum, 'psi', self.params).compactRead()
-        psi_raw = varPsi.data
-        coords0 = varPsi.coords
-
-        print(f"   psi shape: {psi_raw.shape}, min={psi_raw.min()}, max={psi_raw.max()}")
-
-        # -------------- 4) Interpolate if interpFac>1 --------------
-        if self.interpFac > 1:
-            psi, coords = auxFuncs.getFFTInterp(psi_raw, coords0, fac=self.interpFac)
-        else:
-            print("   Using original (no upsampling)")
-            psi = psi_raw
-            coords = coords0
-
-        x = coords[0]
-        y = coords[1]
-        dx = [coords[d][1] - coords[d][0] for d in range(2)]
-
-        # -------------- 5) Find X-points --------------
-        # Suppose you have an auxFuncs.findXPoints(...) 
-        # that returns an array of shape (nXpts, 2), each row = (ix, iy)
-
-        if useB:
-            f = bx;
-            g = by
-        else:
-            f = psi;
-            g = None
-
         t2 = timer()
         # Indicies of critical points, X points, and O points (max and min)
-        if self.xptCacheDir == None:
-          critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
-          [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
+        if self.xptCacheDir != None and cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
+          psi = np.load(self.xptCacheDir / f"{fnum}_psi.npy")
+          critPoints = np.load(self.xptCacheDir / f"{fnum}_critPts.npy")
+          xpts = np.load(self.xptCacheDir / f"{fnum}_xpts.npy")
+          optsMax = np.load(self.xptCacheDir / f"{fnum}_optsMax.npy")
+          optsMin = np.load(self.xptCacheDir / f"{fnum}_optsMin.npy")
         else:
-          cachedFrame = self.xptCacheDir / f"{fnum}_xpts.npy"
-          if not cachedFrame.exists():
-            critPoints = auxFuncs.getCritPoints(f, g=g, dx=dx)
-            [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(f, critPoints, g=g, dx=dx)
-            np.save(self.xptCacheDir / f"{fnum}_critPts.npy",critPoints)
-            np.save(self.xptCacheDir / f"{fnum}_xpts.npy",xpts)
-            np.save(self.xptCacheDir / f"{fnum}_optsMax.npy",optsMax)
-            np.save(self.xptCacheDir / f"{fnum}_optsMin.npy",optsMin)
-          else:
-            critPoints = np.load(self.xptCacheDir / f"{fnum}_critPts.npy")
-            xpts = np.load(self.xptCacheDir / f"{fnum}_xpts.npy")
-            optsMax = np.load(self.xptCacheDir / f"{fnum}_optsMax.npy")
-            optsMin = np.load(self.xptCacheDir / f"{fnum}_optsMin.npy")
+          [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=1)
+          fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
+                  "optsMax":optsMax, "optsMin":optsMin}
+          writePgkylDataToCache(self.xptCacheDir, fnum, fields)
+        self.params["axesNorm"] = axesNorm
 
         print("time (s) to find X and O points: " + str(timer()-t2))
 
-        numC = np.shape(critPoints)[1]
-        numX = np.shape(xpts)[0];
-        numOMax = np.shape(optsMax)[0];
-        numOMin = np.shape(optsMin)[0];
-
         # Create array of 0s with 1s only at X points
-        binaryMap = np.zeros(np.shape(f));
+        binaryMap = np.zeros(np.shape(psi));
         binaryMap[xpts[:, 0], xpts[:, 1]] = 1
 
         binaryMap = expand_xpoints_mask(binaryMap, kernel_size=9)
@@ -265,9 +229,9 @@ class XPointDataset(Dataset):
             "reflectionAxis": -1, # no reflection
             "psi": psi_torch,        # shape [1, Nx, Ny]
             "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
-            "x": x,
-            "y": y,
-            "filenameBase": tmp.filenameBase, 
+            "x": coords[0],
+            "y": coords[1],
+            "filenameBase": fileName,
             "params": dict(self.params)  # copy of the params for local plotting
         }
 
@@ -466,8 +430,8 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
     if params["plotContours"]:
         plt.rcParams["contour.negative_linestyle"] = "solid"
         cs = plt.contour(
-            x / params["axesNorm"][0],
-            y / params["axesNorm"][1],
+            x / params["axesNorm"],
+            y / params["axesNorm"],
             np.transpose(psi_np),          
             params["numContours"],
             colors=params["colorContours"],
@@ -488,8 +452,8 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
         xpts_row, xpts_col = np.where(xpoint_mask == 1)
         # plot as black 'x'
         plt.plot(
-            x[xpts_row] / params["axesNorm"][0],
-            y[xpts_col] / params["axesNorm"][1],
+            x[xpts_row] / params["axesNorm"],
+            y[xpts_col] / params["axesNorm"],
             'xk'
         )
 
@@ -520,8 +484,8 @@ def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, fi
     if params["plotContours"]:
         plt.rcParams["contour.negative_linestyle"] = "solid"
         cs = plt.contour(
-            x / params["axesNorm"][0],
-            y / params["axesNorm"][1],
+            x / params["axesNorm"],
+            y / params["axesNorm"],
             np.transpose(psi_np),          
             params["numContours"],
             colors='k',
@@ -543,22 +507,22 @@ def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, fi
     
     if len(tp_rows) > 0:
         plt.plot(
-            x[tp_rows] / params["axesNorm"][0],
-            y[tp_cols] / params["axesNorm"][1],
+            x[tp_rows] / params["axesNorm"],
+            y[tp_cols] / params["axesNorm"],
             'o', color='green', markersize=8, label="True Positives"
         )
     
     if len(fp_rows) > 0:
         plt.plot(
-            x[fp_rows] / params["axesNorm"][0],
-            y[fp_cols] / params["axesNorm"][1],
+            x[fp_rows] / params["axesNorm"],
+            y[fp_cols] / params["axesNorm"],
             'o', color='red', markersize=8, label="False Positives"
         )
     
     if len(fn_rows) > 0:
         plt.plot(
-            x[fn_rows] / params["axesNorm"][0],
-            y[fn_cols] / params["axesNorm"][1],
+            x[fn_rows] / params["axesNorm"],
+            y[fn_cols] / params["axesNorm"],
             'o', color='yellow', markersize=8, label="False Negatives"
         )
     
@@ -650,7 +614,7 @@ def parseCommandLineArgs():
             specify the path to a directory that will be used to cache
             the outputs of the analytic Xpoint finder
             ''')
-    parser.add_argument('--plot', action='store_false',
+    parser.add_argument('--plot', action=argparse.BooleanOptionalAction,
             help='create figures of the ground truth X-points and model identified X-points')
     parser.add_argument('--plotDir', type=Path, default="./plots",
             help='directory where figures are written')
@@ -717,11 +681,10 @@ def main():
     train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
     val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
-    train_dataset = XPointDataset(args.paramFile, train_fnums, constructJz=1,
-            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir,
-            rotateAndReflect=True)
-    val_dataset   = XPointDataset(args.paramFile, val_fnums,   constructJz=1,
-            interpFac=1, saveFig=1, xptCacheDir=args.xptCacheDir)
+    train_dataset = XPointDataset(args.paramFile, train_fnums,
+            xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
+    val_dataset   = XPointDataset(args.paramFile, val_fnums,
+            xptCacheDir=args.xptCacheDir)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
