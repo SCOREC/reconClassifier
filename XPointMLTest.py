@@ -202,12 +202,21 @@ class XPointDataset(Dataset):
           xpts = np.load(self.xptCacheDir / f"{fnum}_xpts.npy")
           optsMax = np.load(self.xptCacheDir / f"{fnum}_optsMax.npy")
           optsMin = np.load(self.xptCacheDir / f"{fnum}_optsMin.npy")
+          fileName = np.load(self.xptCacheDir / f"{fnum}_fileName.npy") #FIXME write to metadata
+          axesNorm = np.load(self.xptCacheDir / f"{fnum}_axesNorm.npy")
+          coords = np.load(self.xptCacheDir / f"{fnum}_coords.npy")
+          bx = np.load(self.xptCacheDir / f"{fnum}_Bx.npy")
+          by = np.load(self.xptCacheDir / f"{fnum}_By.npy")
+          jz = np.load(self.xptCacheDir / f"{fnum}_Jz.npy")
         else:
           [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=1)
           fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
-                  "optsMax":optsMax, "optsMin":optsMin}
+                    "optsMax":optsMax, "optsMin":optsMin,
+                    "axesNorm": axesNorm, "coords": coords,
+                    "Bx":bx, "By":by, "Jz":jz}
           writePgkylDataToCache(self.xptCacheDir, fnum, fields)
         self.params["axesNorm"] = axesNorm
+        print(f"axesNorm: {axesNorm}")
 
         print("time (s) to find X and O points: " + str(timer()-t2))
 
