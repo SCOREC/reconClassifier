@@ -247,6 +247,10 @@ class XPointDataset(Dataset):
 
         # -------------- 6) Convert to Torch Tensors --------------
         psi_torch = torch.from_numpy(fields["psi"]).float().unsqueeze(0)      # [1, Nx, Ny]
+        bx_torch = torch.from_numpy(fields["Bx"]).float().unsqueeze(0)
+        by_torch = torch.from_numpy(fields["By"]).float().unsqueeze(0)
+        jz_torch = torch.from_numpy(fields["Jz"]).float().unsqueeze(0)
+        all_torch = torch.cat((psi_torch,bx_torch,by_torch,jz_torch)) # [4, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
         print("time (s) to load and process gkyl frame: " + str(timer()-t0))
@@ -256,7 +260,8 @@ class XPointDataset(Dataset):
             "rotation": 0,
             "reflectionAxis": -1, # no reflection
             "psi": psi_torch,        # shape [1, Nx, Ny]
-            "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
+            "all": all_torch,        # shape [4, Nx, Ny]
+            "mask": mask_torch,      # shape [1, Nx, Ny]
             "x": fields["coords"][0],
             "y": fields["coords"][1],
             "filenameBase": fields["fileName"],
@@ -338,8 +343,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
     running_loss = 0.0
     for batch in loader:
-        psi, mask = batch["psi"].to(device), batch["mask"].to(device)
-        pred = model(psi)
+        all, mask = batch["all"].to(device), batch["mask"].to(device)
+        pred = model(all)
 
         loss = criterion(pred, mask)
 
@@ -354,8 +359,8 @@ def validate_one_epoch(model, loader, criterion, device):
     val_loss = 0.0
     with torch.no_grad():
         for batch in loader:
-            psi, mask = batch["psi"].to(device), batch["mask"].to(device)
-            pred = model(psi)
+            all, mask = batch["all"].to(device), batch["mask"].to(device)
+            pred = model(all)
             loss = criterion(pred, mask)
             val_loss += loss.item()
     return val_loss / len(loader)
@@ -710,7 +715,7 @@ def main():
     val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
     train_dataset = XPointDataset(args.paramFile, train_fnums,
-            xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
+            xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
     val_dataset   = XPointDataset(args.paramFile, val_fnums,
             xptCacheDir=args.xptCacheDir)
 
@@ -723,7 +728,7 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = UNet(input_channels=1, base_channels=16).to(device)
+    model = UNet(input_channels=4, base_channels=64).to(device)
 
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
@@ -750,7 +755,7 @@ def main():
         return 1;
 
     # (D) Plotting after training
-    model.eval() 
+    model.eval() # switch to inference mode
     outDir = "plots"
     interpFac = 1  
 
@@ -775,9 +780,9 @@ def main():
             params   = item["params"]
 
             # Get CNN prediction
-            psi_torch = item["psi"].unsqueeze(0).to(device) # => [1,1,Nx,Ny]
-            pred_mask = model(psi_torch)                    # => [1,1,Nx,Ny]
-            pred_mask_np = pred_mask[0,0].cpu().numpy()     # => [Nx,Ny]
+            all_torch = item["all"].unsqueeze(0).to(device)
+            pred_mask = model(all_torch)
+            pred_mask_np = pred_mask[0,0].cpu().numpy()
             # Binarize
             pred_bin = (pred_mask_np > 0.5).astype(np.float32)
 
