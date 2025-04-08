@@ -128,10 +128,27 @@ def cachedPgkylDataExists(cacheDir, frameNumber, fieldName):
      cachedFrame = cacheDir / f"{frameNumber}_{fieldName}.npy"
      return cachedFrame.exists();
 
+def loadPgkylDataFromCache(cacheDir, frameNumber, fields):
+  outFields = {}
+  if cacheDir != None:
+     for name in fields.keys():
+        if name == "fileName":
+           with open(cacheDir / f"{frameNumber}_{name}.txt", "r") as file:
+              outFields[name] = file.read().rstrip()
+        else:
+           outFields[name] = np.load(cacheDir / f"{frameNumber}_{name}.npy")
+     return outFields
+  else:
+     return None
+
 def writePgkylDataToCache(cacheDir, frameNumber, fields):
   if cacheDir != None:
      for name, field in fields.items():
-       np.save(cacheDir / f"{frameNumber}_{name}.npy",field)
+        if name == "fileName":
+           with open(cacheDir / f"{frameNumber}_{name}.txt", "w") as text_file:
+              text_file.write(f"{field}")
+        else:
+           np.save(cacheDir / f"{frameNumber}_{name}.npy",field)
 
 # DATASET DEFINITION
 class XPointDataset(Dataset):
@@ -195,39 +212,41 @@ class XPointDataset(Dataset):
               print(f"Xpoint cache directory {self.xptCacheDir} does not exist...  exiting")
               sys.exit()
         t2 = timer()
+
+        fields = {"psi":None,
+                  "critPts":None,
+                  "xpts":None,
+                  "optsMax":None,
+                  "optsMin":None,
+                  "axesNorm":None,
+                  "coords":None,
+                  "fileName":None,
+                  "Bx":None, "By":None,
+                  "Jz":None}
+
         # Indicies of critical points, X points, and O points (max and min)
         if self.xptCacheDir != None and cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
-          psi = np.load(self.xptCacheDir / f"{fnum}_psi.npy")
-          critPoints = np.load(self.xptCacheDir / f"{fnum}_critPts.npy")
-          xpts = np.load(self.xptCacheDir / f"{fnum}_xpts.npy")
-          optsMax = np.load(self.xptCacheDir / f"{fnum}_optsMax.npy")
-          optsMin = np.load(self.xptCacheDir / f"{fnum}_optsMin.npy")
-          fileName = np.load(self.xptCacheDir / f"{fnum}_fileName.npy") #FIXME write to metadata
-          axesNorm = np.load(self.xptCacheDir / f"{fnum}_axesNorm.npy")
-          coords = np.load(self.xptCacheDir / f"{fnum}_coords.npy")
-          bx = np.load(self.xptCacheDir / f"{fnum}_Bx.npy")
-          by = np.load(self.xptCacheDir / f"{fnum}_By.npy")
-          jz = np.load(self.xptCacheDir / f"{fnum}_Jz.npy")
+          fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
         else:
           [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=1)
           fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
                     "optsMax":optsMax, "optsMin":optsMin,
                     "axesNorm": axesNorm, "coords": coords,
+                    "fileName": fileName,
                     "Bx":bx, "By":by, "Jz":jz}
           writePgkylDataToCache(self.xptCacheDir, fnum, fields)
-        self.params["axesNorm"] = axesNorm
-        print(f"axesNorm: {axesNorm}")
+        self.params["axesNorm"] = fields["axesNorm"]
 
         print("time (s) to find X and O points: " + str(timer()-t2))
 
         # Create array of 0s with 1s only at X points
-        binaryMap = np.zeros(np.shape(psi));
-        binaryMap[xpts[:, 0], xpts[:, 1]] = 1
+        binaryMap = np.zeros(np.shape(fields["psi"]))
+        binaryMap[fields["xpts"][:, 0], fields["xpts"][:, 1]] = 1
 
         binaryMap = expand_xpoints_mask(binaryMap, kernel_size=9)
 
         # -------------- 6) Convert to Torch Tensors --------------
-        psi_torch = torch.from_numpy(psi).float().unsqueeze(0)      # [1, Nx, Ny]
+        psi_torch = torch.from_numpy(fields["psi"]).float().unsqueeze(0)      # [1, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
         print("time (s) to load and process gkyl frame: " + str(timer()-t0))
@@ -238,9 +257,9 @@ class XPointDataset(Dataset):
             "reflectionAxis": -1, # no reflection
             "psi": psi_torch,        # shape [1, Nx, Ny]
             "mask": mask_torch,      # shape [1, Nx, Ny]    // Used in: psi, mask = batch["psi"].to(device), batch["mask"].to(device)
-            "x": coords[0],
-            "y": coords[1],
-            "filenameBase": fileName,
+            "x": fields["coords"][0],
+            "y": fields["coords"][1],
+            "filenameBase": fields["fileName"],
             "params": dict(self.params)  # copy of the params for local plotting
         }
 
