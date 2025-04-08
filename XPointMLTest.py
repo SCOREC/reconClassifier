@@ -738,7 +738,7 @@ def main():
             shuffle=False, pin_memory=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = UNet(input_channels=4, base_channels=16).to(device)
+    model = UNet(input_channels=4, base_channels=64).to(device)
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
