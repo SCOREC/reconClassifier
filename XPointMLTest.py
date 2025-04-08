@@ -159,7 +159,8 @@ class XPointDataset(Dataset):
       - Finds X-points -> builds a 2D binary mask.
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
-    def __init__(self, paramFile, fnumList, xptCacheDir=None, rotateAndReflect=False):
+    def __init__(self, paramFile, fnumList, xptCacheDir=None,
+            rotateAndReflect=False, verbosity=0):
         """
         paramFile:   Path to parameter file (string).
         fnumList:    List of frames to iterate. 
@@ -168,6 +169,7 @@ class XPointDataset(Dataset):
         self.paramFile   = paramFile
         self.fnumList    = list(fnumList)  # ensure indexable
         self.xptCacheDir = xptCacheDir
+        self.verbosity = verbosity
 
         # We'll store a base 'params' once here, and then customize in __getitem__:
         self.params = {}
@@ -228,7 +230,7 @@ class XPointDataset(Dataset):
         if self.xptCacheDir != None and cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
           fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
         else:
-          [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=1)
+          [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=self.verbosity)
           fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
                     "optsMax":optsMax, "optsMin":optsMin,
                     "axesNorm": axesNorm, "coords": coords,
@@ -237,7 +239,8 @@ class XPointDataset(Dataset):
           writePgkylDataToCache(self.xptCacheDir, fnum, fields)
         self.params["axesNorm"] = fields["axesNorm"]
 
-        print("time (s) to find X and O points: " + str(timer()-t2))
+        if self.verbosity > 0:
+          print("time (s) to find X and O points: " + str(timer()-t2))
 
         # Create array of 0s with 1s only at X points
         binaryMap = np.zeros(np.shape(fields["psi"]))
@@ -253,7 +256,8 @@ class XPointDataset(Dataset):
         all_torch = torch.cat((psi_torch,bx_torch,by_torch,jz_torch)) # [4, Nx, Ny]
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
-        print("time (s) to load and process gkyl frame: " + str(timer()-t0))
+        if self.verbosity > 0:
+          print("time (s) to load and process gkyl frame: " + str(timer()-t0))
 
         return {
             "fnum": fnum,
