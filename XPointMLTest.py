@@ -352,7 +352,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
         loss = criterion(pred, mask)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
@@ -710,6 +710,10 @@ def main():
     checkCommandLineArgs(args)
     printCommandLineArgs(args)
 
+    # performance optimizations
+    torch.autograd.set_detect_anomaly(False)
+    torch.autograd.profiler.profile(False)
+
     # output directory:
     outDir = args.plotDir
     os.makedirs(outDir, exist_ok=True)
@@ -728,11 +732,18 @@ def main():
     print(f"number of training frames (original + augmented): {len(train_dataset)}")
     print(f"number of validation frames: {len(val_dataset)}")
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=False)
-    val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batchSize,
+            shuffle=False, pin_memory=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize,
+            shuffle=False, pin_memory=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = UNet(input_channels=4, base_channels=64).to(device)
+    model = UNet(input_channels=4, base_channels=16).to(device)
+
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
 
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
@@ -745,9 +756,11 @@ def main():
     
     num_epochs = args.epochs
     for epoch in range(num_epochs):
+        e_start = timer()
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
-        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
+        print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} "
+              f"ValLoss={val_loss[-1]} Time {timer()-e_start}")
 
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
