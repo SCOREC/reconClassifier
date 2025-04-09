@@ -64,12 +64,14 @@ def rotate(frameData,deg):
         print(f"invalid rotation specified... exiting")
         sys.exit()
     psi = v2.functional.rotate(frameData["psi"], deg, v2.InterpolationMode.BILINEAR)
+    all = v2.functional.rotate(frameData["all"], deg, v2.InterpolationMode.BILINEAR)
     mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.BILINEAR)
     return {
         "fnum": frameData["fnum"],
         "rotation": deg,
         "reflectionAxis": -1, # no reflection
         "psi": psi,
+        "all": all,
         "mask": mask,
         "x": frameData["x"],
         "y": frameData["y"],
@@ -82,12 +84,14 @@ def reflect(frameData,axis):
         print(f"invalid reflection axis specified... exiting")
         sys.exit()
     psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
+    all = torch.flip(frameData["all"], dims=(axis,))
     mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
     return {
         "fnum": frameData["fnum"],
         "rotation": 0,
         "reflectionAxis": axis,
         "psi": psi,
+        "all": all,
         "mask": mask,
         "x": frameData["x"],
         "y": frameData["y"],
@@ -723,7 +727,7 @@ def main():
     val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
     train_dataset = XPointDataset(args.paramFile, train_fnums,
-            xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
+            xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
     val_dataset   = XPointDataset(args.paramFile, val_fnums,
             xptCacheDir=args.xptCacheDir)
 
