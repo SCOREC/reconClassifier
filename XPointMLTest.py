@@ -741,13 +741,16 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize,
             shuffle=False, pin_memory=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = UNet(input_channels=4, base_channels=64).to(device)
-
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"device {device}")
+
+    model = UNet(input_channels=4, base_channels=64).to(device)
 
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
