@@ -625,7 +625,7 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
 
 def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
-    parser.add_argument('--learningRate', type=float, default=1e-3,
+    parser.add_argument('--learningRate', type=float, default=1e-5,
             help='specify the learning rate')
     parser.add_argument('--batchSize', type=int, default=1,
             help='specify the batch size')
@@ -756,14 +756,6 @@ def main():
     
     num_epochs = args.epochs
     for epoch in range(num_epochs):
-        if epoch == 200:
-          lr = args.learningRate/10
-          optimizer = optim.Adam(model.parameters(), lr=1e-4)
-          print(f"learning rate set to {lr}")
-        if epoch == 400:
-          lr = args.learningRate/100
-          optimizer = optim.Adam(model.parameters(), lr=1e-5)
-          print(f"learning rate set to {lr}")
         e_start = timer()
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
