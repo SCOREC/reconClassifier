@@ -84,7 +84,7 @@ def reflect(frameData,axis):
         print(f"invalid reflection axis specified... exiting")
         sys.exit()
     psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
-    all = torch.flip(frameData["all"], dims=(axis,)).unsqueeze(0)
+    all = torch.flip(frameData["all"], dims=(axis,))
     mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
     return {
         "fnum": frameData["fnum"],
