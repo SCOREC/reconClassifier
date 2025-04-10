@@ -704,6 +704,42 @@ def printCommandLineArgs(args):
         print(f"  {arg}: {getattr(args, arg)}")
     print("}")
 
+# Function to save model checkpoint
+def save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch, checkpoint_dir="checkpoints"):
+    """
+    Save model checkpoint including model state, optimizer state, and training metrics
+    
+    Parameters:
+    model: The neural network model
+    optimizer: The optimizer used for training
+    train_loss: List of training losses
+    val_loss: List of validation losses
+    epoch: Current epoch number
+    checkpoint_dir: Directory to save checkpoints
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    checkpoint_path = os.path.join(checkpoint_dir, f"xpoint_model_epoch_{epoch}.pt")
+    
+    # Create checkpoint dictionary
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_loss': train_loss,
+        'val_loss': val_loss
+    }
+    
+    # Save checkpoint
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Model checkpoint saved at epoch {epoch} to {checkpoint_path}")
+    
+    # Save the latest model separately for easy loading
+    latest_path = os.path.join(checkpoint_dir, "xpoint_model_latest.pt")
+    torch.save(checkpoint, latest_path)
+    print(f"Latest model saved to {latest_path}")
+
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
