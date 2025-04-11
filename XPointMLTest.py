@@ -809,17 +809,35 @@ def main():
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
 
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    latest_checkpoint_path = os.path.join(checkpoint_dir, "xpoint_model_latest.pt")
+    start_epoch = 0
+    train_loss = []
+    val_loss = []
+
+    if os.path.exists(latest_checkpoint_path):
+        model, optimizer, start_epoch, train_loss, val_loss = load_model_checkpoint(
+            model, optimizer, latest_checkpoint_path
+        )
+        print(f"Resuming training from epoch {start_epoch+1}")
+    else:
+        print("Starting training from scratch")
+
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
 
     train_loss = []
     val_loss = []
-    
+
     num_epochs = args.epochs
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
         print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
+        
+        # Save model checkpoint after each epoch
+        save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir)
 
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
