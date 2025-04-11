@@ -704,6 +704,78 @@ def printCommandLineArgs(args):
         print(f"  {arg}: {getattr(args, arg)}")
     print("}")
 
+# Function to save model checkpoint
+def save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch, checkpoint_dir="checkpoints"):
+    """
+    Save model checkpoint including model state, optimizer state, and training metrics
+    
+    Parameters:
+    model: The neural network model
+    optimizer: The optimizer used for training
+    train_loss: List of training losses
+    val_loss: List of validation losses
+    epoch: Current epoch number
+    checkpoint_dir: Directory to save checkpoints
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    checkpoint_path = os.path.join(checkpoint_dir, f"xpoint_model_epoch_{epoch}.pt")
+    
+    # Create checkpoint dictionary
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_loss': train_loss,
+        'val_loss': val_loss
+    }
+    
+    # Save checkpoint
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Model checkpoint saved at epoch {epoch} to {checkpoint_path}")
+    
+    # Save the latest model separately for easy loading
+    latest_path = os.path.join(checkpoint_dir, "xpoint_model_latest.pt")
+    torch.save(checkpoint, latest_path)
+    print(f"Latest model saved to {latest_path}")
+
+
+
+# Function to load model checkpoint
+def load_model_checkpoint(model, optimizer, checkpoint_path):
+    """
+    Load model checkpoint
+    
+    Parameters:
+    model: The neural network model to load weights into
+    optimizer: The optimizer to load state into
+    checkpoint_path: Path to the checkpoint file
+    
+    Returns:
+    model: Updated model with loaded weights
+    optimizer: Updated optimizer with loaded state
+    epoch: Last saved epoch number
+    train_loss: List of training losses
+    val_loss: List of validation losses
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"No checkpoint found at {checkpoint_path}")
+        return model, optimizer, 0, [], []
+    
+    print(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    epoch = checkpoint['epoch']
+    train_loss = checkpoint['train_loss']
+    val_loss = checkpoint['val_loss']
+    
+    print(f"Loaded checkpoint from epoch {epoch}")
+    return model, optimizer, epoch, train_loss, val_loss
+
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
@@ -737,17 +809,35 @@ def main():
     criterion = DiceLoss(smooth=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.learningRate)
 
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    latest_checkpoint_path = os.path.join(checkpoint_dir, "xpoint_model_latest.pt")
+    start_epoch = 0
+    train_loss = []
+    val_loss = []
+
+    if os.path.exists(latest_checkpoint_path):
+        model, optimizer, start_epoch, train_loss, val_loss = load_model_checkpoint(
+            model, optimizer, latest_checkpoint_path
+        )
+        print(f"Resuming training from epoch {start_epoch+1}")
+    else:
+        print("Starting training from scratch")
+
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
 
     train_loss = []
     val_loss = []
-    
+
     num_epochs = args.epochs
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
         val_loss.append(validate_one_epoch(model, val_loader, criterion, device))
         print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
+        
+        # Save model checkpoint after each epoch
+        save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir)
 
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
