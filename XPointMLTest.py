@@ -740,6 +740,42 @@ def save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch, checkpo
     print(f"Latest model saved to {latest_path}")
 
 
+
+# Function to load model checkpoint
+def load_model_checkpoint(model, optimizer, checkpoint_path):
+    """
+    Load model checkpoint
+    
+    Parameters:
+    model: The neural network model to load weights into
+    optimizer: The optimizer to load state into
+    checkpoint_path: Path to the checkpoint file
+    
+    Returns:
+    model: Updated model with loaded weights
+    optimizer: Updated optimizer with loaded state
+    epoch: Last saved epoch number
+    train_loss: List of training losses
+    val_loss: List of validation losses
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"No checkpoint found at {checkpoint_path}")
+        return model, optimizer, 0, [], []
+    
+    print(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    epoch = checkpoint['epoch']
+    train_loss = checkpoint['train_loss']
+    val_loss = checkpoint['val_loss']
+    
+    print(f"Loaded checkpoint from epoch {epoch}")
+    return model, optimizer, epoch, train_loss, val_loss
+
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
