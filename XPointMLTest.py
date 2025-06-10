@@ -59,12 +59,24 @@ def expand_xpoints_mask(binary_mask, kernel_size=9):
     
     return expanded_mask
 
+def plotSimple(arr, outfile):
+    plt.imshow(arr, interpolation="nearest", origin="upper")
+    plt.colorbar()
+    plt.savefig(outfile)
+    plt.clf()
+
 def rotate(frameData,deg):
     if deg not in [90, 180, 270]:
         print(f"invalid rotation specified... exiting")
         sys.exit()
     psi = v2.functional.rotate(frameData["psi"], deg, v2.InterpolationMode.BILINEAR)
     all = v2.functional.rotate(frameData["all"], deg, v2.InterpolationMode.BILINEAR)
+
+    plotSimple(all[0], f"{frameData['fnum']}_rotation{deg}_all0.png")
+    plotSimple(all[1], f"{frameData['fnum']}_rotation{deg}_all1.png")
+    plotSimple(all[2], f"{frameData['fnum']}_rotation{deg}_all2.png")
+    plotSimple(all[3], f"{frameData['fnum']}_rotation{deg}_all3.png")
+    
     mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.BILINEAR)
     return {
         "fnum": frameData["fnum"],
@@ -85,6 +97,10 @@ def reflect(frameData,axis):
         sys.exit()
     psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
     all = torch.flip(frameData["all"], dims=(axis,))
+    plotSimple(all[0], f"{frameData['fnum']}_reflectionAxis{axis}_all0.png")
+    plotSimple(all[1], f"{frameData['fnum']}_reflectionAxis{axis}_all1.png")
+    plotSimple(all[2], f"{frameData['fnum']}_reflectionAxis{axis}_all2.png")
+    plotSimple(all[3], f"{frameData['fnum']}_reflectionAxis{axis}_all3.png")
     mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
     return {
         "fnum": frameData["fnum"],
@@ -258,6 +274,10 @@ class XPointDataset(Dataset):
         by_torch = torch.from_numpy(fields["By"]).float().unsqueeze(0)
         jz_torch = torch.from_numpy(fields["Jz"]).float().unsqueeze(0)
         all_torch = torch.cat((psi_torch,bx_torch,by_torch,jz_torch)) # [4, Nx, Ny]
+        plotSimple(all_torch[0], f"{fnum}_all0.png")
+        plotSimple(all_torch[1], f"{fnum}_all1.png")
+        plotSimple(all_torch[2], f"{fnum}_all2.png")
+        plotSimple(all_torch[3], f"{fnum}_all3.png")
         mask_torch = torch.from_numpy(binaryMap).float().unsqueeze(0)  # [1, Nx, Ny]
 
         if self.verbosity > 0:
