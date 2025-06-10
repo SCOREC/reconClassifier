@@ -645,6 +645,8 @@ def parseCommandLineArgs():
             help='specify the number of the last frame (exclusive) used for validation')
     parser.add_argument('--minTrainingLoss', type=int, default=3,
             help='minimum reduction in training loss in orders of magnitude')
+    parser.add_argument('--checkPointFrequency', type=int, default=10,
+            help='number of epochs between checkpoints')
     parser.add_argument('--paramFile', type=Path, default=None,
             help='''
             specify the path to the parameter txt file, the parent
@@ -701,6 +703,10 @@ def checkCommandLineArgs(args):
 
     if args.minTrainingLoss < 0:
       print(f"minTrainingLoss must be >= 0... exiting")
+      sys.exit()
+
+    if args.checkPointFrequency < 0:
+      print(f"checkPointFrequency must be >= 0... exiting")
       sys.exit()
 
 def printCommandLineArgs(args):
@@ -846,7 +852,8 @@ def main():
         print(f"[Epoch {epoch+1}/{num_epochs}]  TrainLoss={train_loss[-1]} ValLoss={val_loss[-1]}")
         
         # Save model checkpoint after each epoch
-        save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir)
+        if epoch % args.checkPointFrequency == 0:
+          save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir)
 
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
