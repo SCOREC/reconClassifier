@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import os
+import os, errno
 from pathlib import Path
 import sys
 import argparse
@@ -738,13 +738,18 @@ def save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch, checkpo
     # Save checkpoint
     torch.save(checkpoint, checkpoint_path)
     print(f"Model checkpoint saved at epoch {epoch} to {checkpoint_path}")
-    
-    # Save the latest model separately for easy loading
+
+    # create symbolic link to latest checkpoint
+    target_path = f"xpoint_model_epoch_{epoch}.pt"
     latest_path = os.path.join(checkpoint_dir, "xpoint_model_latest.pt")
-    torch.save(checkpoint, latest_path)
-    print(f"Latest model saved to {latest_path}")
-
-
+    try:
+        os.symlink(target_path, latest_path)
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            os.remove(latest_path)
+            os.symlink(target_path, latest_path)
+        else:
+            raise e
 
 # Function to load model checkpoint
 def load_model_checkpoint(model, optimizer, checkpoint_path):
