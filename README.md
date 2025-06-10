@@ -44,7 +44,8 @@ If there were no problems, then the last line of output from the above commands 
 ## run classifier with cached x-point finder results
 
 
-create a bash script to run a test with a single epoch
+create a bash script to run a test with two epochs and a small subset of the
+training data ('frames')
 
 ```
 pushd ${rcRoot}
@@ -63,7 +64,9 @@ python -u ${rcRoot}/reconClassifier/XPointMLTest.py \
 --xptCacheDir=/space/cwsmith/nsfCssiSpaceWeather2022/mlReconnection2025/1024Res_v0/cache04082025 \
 --epochs 2 \
 --learningRate 1e-3 \
---batchSize 2
+--batchSize 2 \
+--trainFrameLast 2 \
+--validationFrameLast 143
 popd
 EOF
 chmod +x runReconClass.sh
