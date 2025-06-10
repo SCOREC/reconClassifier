@@ -643,7 +643,10 @@ def parseCommandLineArgs():
     parser.add_argument('--validationFrameLast', type=int, default=150,
             help='specify the number of the last frame (exclusive) used for validation')
     parser.add_argument('--minTrainingLoss', type=int, default=3,
-            help='minimum reduction in training loss in orders of magnitude')
+            help='''
+            minimum reduction in training loss in orders of magnitude,
+            set to 0 to disable the check
+            ''')
     parser.add_argument('--checkPointFrequency', type=int, default=10,
             help='number of epochs between checkpoints')
     parser.add_argument('--paramFile', type=Path, default=None,
