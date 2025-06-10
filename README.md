@@ -38,7 +38,7 @@ popd
 
 If there were no problems, then the last line of output from the above commands will contain the following (with a slightly different time):
 
-`==== 313131 passed, 1 skipped in 6.10s ====`
+`==== 31 passed, 1 skipped in 6.10s ====`
 
 
 ## run classifier with cached x-point finder results
