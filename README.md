@@ -3,7 +3,9 @@ Magnetic reconnection classifier for Gkeyll simulations on 2D domains
 
 ## Python Environment setup
 
-The following commands should be run once on `checkers` to create a virtual environment that has access to pytorch and `pgkyl` ([postgkyl](https://github.com/ammarhakim/postgkyl)).
+The following command should be run once on `checkers` to create a virtual environment that has access to pytorch and `pgkyl` ([postgkyl](https://github.com/ammarhakim/postgkyl)).
+
+Note, the `git clone` commands below use the ssh protocol.  Please check that you have ssh keys configured on GitHub.
 
 ```
 mkdir nsfCssiMlClassifier
