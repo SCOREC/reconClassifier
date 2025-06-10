@@ -1,6 +1,7 @@
 name: Check Training Parameters
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [ main ]
     paths:
