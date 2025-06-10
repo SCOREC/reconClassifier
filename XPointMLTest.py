@@ -622,7 +622,6 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
     ymax = max(max(train_losses), max(val_losses)) * 1.1
     plt.ylim(ymin, ymax)
     
-    plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     print(f"Training history plot saved to {save_path}")
     plt.close()
