@@ -861,9 +861,6 @@ def main():
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
 
-    train_loss = []
-    val_loss = []
-
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
         train_loss.append(train_one_epoch(model, train_loader, criterion, optimizer, device))
