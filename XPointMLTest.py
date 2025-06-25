@@ -77,7 +77,8 @@ def rotate(frameData,deg):
     plotSimple(all[2], f"{frameData['fnum']}_rotation{deg}_all2.png")
     plotSimple(all[3], f"{frameData['fnum']}_rotation{deg}_all3.png")
     
-    mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.BILINEAR)
+    # mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.BILINEAR)
+    mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.NEAREST)
     return {
         "fnum": frameData["fnum"],
         "rotation": deg,
@@ -95,13 +96,21 @@ def reflect(frameData,axis):
     if axis not in [0,1]:
         print(f"invalid reflection axis specified... exiting")
         sys.exit()
-    psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
-    all = torch.flip(frameData["all"], dims=(axis,))
+        
+    # psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
+    # all = torch.flip(frameData["all"], dims=(axis,))
+    # mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
+    
+    psi = torch.flip(frameData["psi"], dims=(axis+1,))
+    all = torch.flip(frameData["all"], dims=(axis+1,))
+    mask = torch.flip(frameData["mask"], dims=(axis+1,))
+    
     plotSimple(all[0], f"{frameData['fnum']}_reflectionAxis{axis}_all0.png")
     plotSimple(all[1], f"{frameData['fnum']}_reflectionAxis{axis}_all1.png")
     plotSimple(all[2], f"{frameData['fnum']}_reflectionAxis{axis}_all2.png")
     plotSimple(all[3], f"{frameData['fnum']}_reflectionAxis{axis}_all3.png")
-    mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
+    
+    
     return {
         "fnum": frameData["fnum"],
         "rotation": 0,
