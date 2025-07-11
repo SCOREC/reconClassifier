@@ -276,7 +276,39 @@ class XPointDataset(Dataset):
             "params": dict(self.params)  # copy of the params for local plotting
         }
 
+class XPointPatchDataset(Dataset):
+    """On‑the‑fly square crops, balancing positive / background patches."""
+    def __init__(self, base_ds, patch=64, pos_ratio=0.6, retries=20):
+        self.base_ds   = base_ds
+        self.patch     = patch
+        self.pos_ratio = pos_ratio
+        self.retries   = retries
+        self.rng       = np.random.default_rng()
 
+    def __len__(self):
+        # give each full frame K random crops per epoch (K=16 by default)
+        return len(self.base_ds) * 16
+
+    def _crop(self, arr, top, left):
+        return arr[..., top:top+self.patch, left:left+self.patch]
+
+    def __getitem__(self, _):
+        frame = self.base_ds[self.rng.integers(len(self.base_ds))]
+        H, W  = frame["mask"].shape[-2:]
+
+        # comments on the logic 
+        for attempt in range(self.retries):
+            y0 = self.rng.integers(0, H - self.patch + 1)
+            x0 = self.rng.integers(0, W - self.patch + 1)
+            crop_mask = self._crop(frame["mask"], y0, x0)
+            has_pos   = crop_mask.sum() > 0
+            want_pos  = (attempt / self.retries) < self.pos_ratio
+
+            if has_pos == want_pos or attempt == self.retries - 1:
+                return {
+                    "all" : self._crop(frame["all"],  y0, x0),
+                    "mask": crop_mask
+                }
 
 # 2) U-NET ARCHITECTURE
 class UNet(nn.Module):
@@ -285,7 +317,7 @@ class UNet(nn.Module):
       in:  (N, 1,   H, W)   ++++ BX, BY, JZ
       out: (N, 1,   H, W)
     """
-    def __init__(self, input_channels=1, base_channels=16):
+    def __init__(self, input_channels=4, base_channels=64):
         super().__init__()
         self.enc1 = self.double_conv(input_channels, base_channels)      # -> base_channels
         self.enc2 = self.double_conv(base_channels, base_channels*2)    # -> 2*base_channels
@@ -418,7 +450,6 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
-        
 
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1.0, eps=1e-7):
@@ -453,7 +484,6 @@ class DiceLoss(nn.Module):
 
         # Return Dice loss (1 - Dice coefficient)
         return 1.0 - dice
-
 # PLOTTING FUNCTION
 def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
         reflectionAxis, filenameBase, interpFac,
@@ -811,14 +841,17 @@ def main():
             xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
     val_dataset   = XPointDataset(args.paramFile, val_fnums,
             xptCacheDir=args.xptCacheDir)
+    
+    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.6, retries=20)
+    val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.6, retries=20)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
     print(f"number of training frames (original + augmented): {len(train_dataset)}")
     print(f"number of validation frames: {len(val_dataset)}")
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=False)
-    val_loader   = DataLoader(val_dataset,   batch_size=args.batchSize, shuffle=False)
+    train_loader = DataLoader(train_crop, batch_size=args.batchSize, shuffle=False)
+    val_loader   = DataLoader(val_crop,   batch_size=args.batchSize, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = UNet(input_channels=4, base_channels=64).to(device)
@@ -843,9 +876,6 @@ def main():
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
-
-    train_loss = []
-    val_loss = []
 
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
