@@ -20,6 +20,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from timeit import default_timer as timer
 
+from ci_tests import SyntheticXPointDataset, test_checkpoint_functionality
+
 def expand_xpoints_mask(binary_mask, kernel_size=9):
     """
     Expands each X-point in a binary mask to include surrounding cells
@@ -63,9 +65,12 @@ def rotate(frameData,deg):
     if deg not in [90, 180, 270]:
         print(f"invalid rotation specified... exiting")
         sys.exit()
+        
     psi = v2.functional.rotate(frameData["psi"], deg, v2.InterpolationMode.BILINEAR)
     all = v2.functional.rotate(frameData["all"], deg, v2.InterpolationMode.BILINEAR)
-    mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.BILINEAR)
+    # For mask, use nearest neighbor interpolation to preserve binary values
+    mask = v2.functional.rotate(frameData["mask"], deg, v2.InterpolationMode.NEAREST)
+    
     return {
         "fnum": frameData["fnum"],
         "rotation": deg,
@@ -83,9 +88,11 @@ def reflect(frameData,axis):
     if axis not in [0,1]:
         print(f"invalid reflection axis specified... exiting")
         sys.exit()
-    psi = torch.flip(frameData["psi"][0], dims=(axis,)).unsqueeze(0)
-    all = torch.flip(frameData["all"], dims=(axis,))
-    mask = torch.flip(frameData["mask"][0], dims=(axis,)).unsqueeze(0)
+            
+    psi = torch.flip(frameData["psi"], dims=(axis+1,))
+    all = torch.flip(frameData["all"], dims=(axis+1,))
+    mask = torch.flip(frameData["mask"], dims=(axis+1,))
+    
     return {
         "fnum": frameData["fnum"],
         "rotation": 0,
@@ -663,10 +670,19 @@ def parseCommandLineArgs():
             help='create figures of the ground truth X-points and model identified X-points')
     parser.add_argument('--plotDir', type=Path, default="./plots",
             help='directory where figures are written')
+    
+    # CI TEST: Add smoke test flag
+    parser.add_argument('--smoke-test', action='store_true',
+            help='Run a minimal smoke test for CI (overrides other parameters)')
+    
     args = parser.parse_args()
     return args
 
 def checkCommandLineArgs(args):
+    # CI TEST: Skip file checks in smoke test mode
+    if args.smoke_test:
+        return
+        
     if args.xptCacheDir != None:
       if not args.xptCacheDir.is_dir():
           print(f"Xpoint cache directory {args.xptCacheDir} does not exist. "
@@ -796,6 +812,32 @@ def load_model_checkpoint(model, optimizer, checkpoint_path):
 
 def main():
     args = parseCommandLineArgs()
+    
+    # CI TEST: Override parameters for smoke test
+    if args.smoke_test:
+        print("=" * 60)
+        print("RUNNING IN SMOKE TEST MODE FOR CI")
+        print("=" * 60)
+        
+        # Override with minimal parameters
+        args.epochs = 5
+        args.batchSize = 1
+        args.trainFrameFirst = 1
+        args.trainFrameLast = 11   # 10 frames for training
+        args.validationFrameFirst = 11
+        args.validationFrameLast = 12  # 1 frame for validation
+        args.plot = False  # Disable plotting for CI
+        args.checkPointFrequency = 2  # Save more frequently
+        args.minTrainingLoss = 0  # Don't fail on convergence in smoke test
+        
+        print("Smoke test parameters:")
+        print(f"  - Training frames: {args.trainFrameFirst} to {args.trainFrameLast-1}")
+        print(f"  - Validation frames: {args.validationFrameFirst} to {args.validationFrameLast-1}")
+        print(f"  - Epochs: {args.epochs}")
+        print(f"  - Batch size: {args.batchSize}")
+        print(f"  - Plotting disabled")
+        print("=" * 60)
+    
     checkCommandLineArgs(args)
     printCommandLineArgs(args)
 
@@ -804,13 +846,22 @@ def main():
     os.makedirs(outDir, exist_ok=True)
 
     t0 = timer()
-    train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
-    val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
+    
+    # CI TEST: Use synthetic data for smoke test
+    if args.smoke_test:
+        print("\nUsing synthetic data for smoke test...")
+        train_dataset = SyntheticXPointDataset(nframes=10, shape=(64, 64), nxpoints=3)
+        val_dataset = SyntheticXPointDataset(nframes=1, shape=(64, 64), nxpoints=3, seed=123)
+        print(f"Created synthetic datasets: {len(train_dataset)} train, {len(val_dataset)} val frames")
+    else:
+        # Original data loading
+        train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
+        val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
 
-    train_dataset = XPointDataset(args.paramFile, train_fnums,
-            xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
-    val_dataset   = XPointDataset(args.paramFile, val_fnums,
-            xptCacheDir=args.xptCacheDir)
+        train_dataset = XPointDataset(args.paramFile, train_fnums,
+                xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
+        val_dataset   = XPointDataset(args.paramFile, val_fnums,
+                xptCacheDir=args.xptCacheDir)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
@@ -833,7 +884,7 @@ def main():
     train_loss = []
     val_loss = []
 
-    if os.path.exists(latest_checkpoint_path):
+    if os.path.exists(latest_checkpoint_path) and not args.smoke_test:
         model, optimizer, start_epoch, train_loss, val_loss = load_model_checkpoint(
             model, optimizer, latest_checkpoint_path
         )
@@ -843,9 +894,6 @@ def main():
 
     t2 = timer()
     print("time (s) to prepare model: " + str(t2-t1))
-
-    train_loss = []
-    val_loss = []
 
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
@@ -860,6 +908,65 @@ def main():
     plot_training_history(train_loss, val_loss)
     print("time (s) to train model: " + str(timer()-t2))
 
+    # CI TEST: Run additional tests if in smoke test mode
+    if args.smoke_test:
+        print("\n" + "="*60)
+        print("SMOKE TEST: Running additional CI tests")
+        print("="*60)
+        
+        # Test 1: Checkpoint save/load
+        checkpoint_test_passed = test_checkpoint_functionality(
+            model, optimizer, device, val_loader, criterion, None, UNet, optim.Adam
+        )
+        
+        # Test 2: Inference test
+        print("Running inference test...")
+        model.eval()
+        with torch.no_grad():
+            # Get one batch
+            test_batch = next(iter(val_loader))
+            test_input = test_batch["all"].to(device)
+            test_output = model(test_input)
+            
+            # Apply sigmoid to get probabilities
+            test_probs = torch.sigmoid(test_output)
+            
+            print(f"Input shape: {test_input.shape}")
+            print(f"Output shape: {test_output.shape}")
+            print(f"Output range (logits): [{test_output.min():.3f}, {test_output.max():.3f}]")
+            print(f"Output range (probs): [{test_probs.min():.3f}, {test_probs.max():.3f}]")
+            print(f"Predicted X-points: {(test_probs > 0.5).sum().item()} pixels")
+        
+        # Test 3: Check if model learned anything
+        initial_train_loss = train_loss[0] if train_loss else float('inf')
+        final_train_loss = train_loss[-1] if train_loss else float('inf')
+        
+        print(f"\nTraining progress:")
+        print(f"Initial loss: {initial_train_loss:.6f}")
+        print(f"Final loss: {final_train_loss:.6f}")
+        
+        if final_train_loss < initial_train_loss:
+            print("✓ Model showed improvement during training")
+            training_improved = True
+        else:
+            print("✗ Model did not improve during training")
+            training_improved = False
+        
+        # Overall smoke test result
+        print("\n" + "="*60)
+        print("SMOKE TEST SUMMARY")
+        print("="*60)
+        print(f"Checkpoint test: {'PASSED' if checkpoint_test_passed else 'FAILED'}")
+        print(f"Training improvement: {'YES' if training_improved else 'NO'}")
+        print(f"Overall result: {'PASSED' if checkpoint_test_passed else 'FAILED'}")
+        print("="*60)
+        
+        # Return appropriate exit code for CI
+        if not checkpoint_test_passed:
+            return 1
+        else:
+            return 0
+
     requiredLossDecreaseMagnitude = args.minTrainingLoss
     if np.log10(abs(train_loss[0]/train_loss[-1])) < requiredLossDecreaseMagnitude:
         print(f"TrainLoss reduced by less than {requiredLossDecreaseMagnitude} orders of magnitude: "
@@ -872,8 +979,12 @@ def main():
     interpFac = 1  
 
     # Evaluate on combined set for demonstration. Exam this part to see if save to remove
-    full_fnums = list(train_fnums) + list(val_fnums)
-    full_dataset = [train_dataset, val_dataset]
+    if not args.smoke_test:
+        train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
+        val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
+        full_dataset = [train_dataset, val_dataset]
+    else:
+        full_dataset = [val_dataset]  # Only use validation data for smoke test
 
     t4 = timer()
 
