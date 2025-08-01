@@ -842,8 +842,8 @@ def main():
     val_dataset   = XPointDataset(args.paramFile, val_fnums,
             xptCacheDir=args.xptCacheDir)
     
-    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.6, retries=20)
-    val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.6, retries=20)
+    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.8, retries=20)
+    val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.8, retries=20)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
