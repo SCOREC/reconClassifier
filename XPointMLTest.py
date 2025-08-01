@@ -824,6 +824,82 @@ def load_model_checkpoint(model, optimizer, checkpoint_path):
     return model, optimizer, epoch, train_loss, val_loss
 
 
+
+def evaluate_with_sliding_window(model, full_image, patch_size=64, stride=32, device='cpu'):
+    """
+    Apply trained model to full-resolution image using sliding window approach.
+    
+    Parameters:
+    model: Trained U-Net model
+    full_image: Input tensor of shape [1, 4, H, W] (batch_size=1, channels=4)
+    patch_size: Size of patches used during training (64)
+    stride: Step size for sliding window (32 = 50% overlap)
+    device: Device to run inference on
+    
+    Returns:
+    prediction: Full-size prediction map of shape [1, 1, H, W]
+    """
+    model.eval()
+    
+    # Get dimensions
+    _, channels, height, width = full_image.shape
+    
+    # Initialize output prediction map and count map for averaging overlaps
+    prediction_map = torch.zeros(1, 1, height, width, device=device)
+    count_map = torch.zeros(1, 1, height, width, device=device)
+    
+    with torch.no_grad():
+        # Slide window across the image
+        for y in range(0, height - patch_size + 1, stride):
+            for x in range(0, width - patch_size + 1, stride):
+                # Extract patch
+                patch = full_image[:, :, y:y+patch_size, x:x+patch_size]
+                
+                # Get prediction for this patch
+                patch_pred = model(patch)
+                
+                # Apply sigmoid to get probabilities
+                patch_pred = torch.sigmoid(patch_pred)
+                
+                # Add to prediction map
+                prediction_map[:, :, y:y+patch_size, x:x+patch_size] += patch_pred
+                count_map[:, :, y:y+patch_size, x:x+patch_size] += 1
+        
+        # Handle edge cases - regions that weren't fully covered
+        # Right edge
+        if (width - patch_size) % stride != 0:
+            x = width - patch_size
+            for y in range(0, height - patch_size + 1, stride):
+                patch = full_image[:, :, y:y+patch_size, x:x+patch_size]
+                patch_pred = torch.sigmoid(model(patch))
+                prediction_map[:, :, y:y+patch_size, x:x+patch_size] += patch_pred
+                count_map[:, :, y:y+patch_size, x:x+patch_size] += 1
+        
+        # Bottom edge
+        if (height - patch_size) % stride != 0:
+            y = height - patch_size
+            for x in range(0, width - patch_size + 1, stride):
+                patch = full_image[:, :, y:y+patch_size, x:x+patch_size]
+                patch_pred = torch.sigmoid(model(patch))
+                prediction_map[:, :, y:y+patch_size, x:x+patch_size] += patch_pred
+                count_map[:, :, y:y+patch_size, x:x+patch_size] += 1
+        
+        # Bottom-right corner
+        if (width - patch_size) % stride != 0 and (height - patch_size) % stride != 0:
+            y = height - patch_size
+            x = width - patch_size
+            patch = full_image[:, :, y:y+patch_size, x:x+patch_size]
+            patch_pred = torch.sigmoid(model(patch))
+            prediction_map[:, :, y:y+patch_size, x:x+patch_size] += patch_pred
+            count_map[:, :, y:y+patch_size, x:x+patch_size] += 1
+    
+    # Average overlapping predictions
+    # Avoid division by zero (though shouldn't happen with proper implementation)
+    prediction_map = prediction_map / torch.clamp(count_map, min=1)
+    
+    return prediction_map
+
+
 def main():
     args = parseCommandLineArgs()
     checkCommandLineArgs(args)
