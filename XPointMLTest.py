@@ -441,7 +441,7 @@ class UNet(nn.Module):
         out = self.out_conv(d1)
         return out
 
-# SIMPLE DICE LOSS (from original file)
+# DICE LOSS
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1.0, eps=1e-7):
         """
@@ -979,7 +979,6 @@ def main():
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
 
-    # USE SIMPLE DICE LOSS (from original)
     criterion = DiceLoss(smooth=1.0)
     
     # Use AdamW optimizer with weight decay for better generalization
