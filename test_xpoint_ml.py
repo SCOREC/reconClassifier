@@ -5,6 +5,7 @@ import torch.optim as optim
 import os
 import pytest
 
+# Make sure all required functions are imported from the main file
 from XPointMLTest import UNet, DiceLoss, expand_xpoints_mask, validate_one_epoch
 from ci_tests import SyntheticXPointDataset
 
@@ -54,7 +55,7 @@ def test_dice_loss_no_match(dice_loss):
 def test_synthetic_dataset_integrity(synthetic_dataset):
     assert len(synthetic_dataset) == 2
     item = synthetic_dataset[0]
-    expected_keys = ["fnum", "all", "mask", "psi", "x", "y"]
+    expected_keys = ["fnum", "all", "mask", "psi", "x", "y", "rotation", "reflectionAxis", "filenameBase", "params"]
     assert all(key in item for key in expected_keys)
     assert item['all'].shape == (4, 32, 32)
     assert item['mask'].shape == (1, 32, 32)
@@ -88,13 +89,14 @@ def test_checkpoint_save_load(unet_model, synthetic_dataset):
     optimizer = optim.Adam(model.parameters(), lr=1e-5)
     criterion = DiceLoss()
     
-    #create a simple dataloader
+    # Create a simple dataloader
     val_loader = DataLoader(synthetic_dataset, batch_size=1, shuffle=False)
     
-    #get initial loss
-    initial_loss = validate_one_epoch(model, val_loader, criterion, device)
+    # get initial loss, passing the required AMP arguments
+    # we can assume no AMP for this CPU-based unit test
+    initial_loss = validate_one_epoch(model, val_loader, criterion, device, use_amp=False, amp_dtype=torch.float32)
     
-    #save checkpoint
+    # Save checkpoint
     test_checkpoint_path = "test_checkpoint_pytest.pt"
     checkpoint = {
         'model_state_dict': model.state_dict(),
@@ -104,7 +106,7 @@ def test_checkpoint_save_load(unet_model, synthetic_dataset):
     }
     torch.save(checkpoint, test_checkpoint_path)
     
-    #create new model and load
+    # Create new model and load
     model2 = UNet(input_channels=4, base_channels=16).to(device)
     optimizer2 = optim.Adam(model2.parameters(), lr=1e-5)
     
@@ -114,14 +116,14 @@ def test_checkpoint_save_load(unet_model, synthetic_dataset):
     
     assert loaded_checkpoint['test_value'] == 42
     
-    #get loaded model loss
-    loaded_loss = validate_one_epoch(model2, val_loader, criterion, device)
+    # Get loaded model loss, again passing the AMP arguments
+    loaded_loss = validate_one_epoch(model2, val_loader, criterion, device, use_amp=False, amp_dtype=torch.float32)
     
-    #check if losses match
+    # Check if losses match
     loss_diff = abs(initial_loss - loaded_loss)
     assert loss_diff < 1e-6, f"Loss difference too large: {loss_diff}"
     
-    #cleanup
+    # Cleanup
     if os.path.exists(test_checkpoint_path):
         os.remove(test_checkpoint_path)
         

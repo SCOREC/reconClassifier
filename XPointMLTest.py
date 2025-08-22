@@ -137,32 +137,32 @@ def getPgkylData(paramFile, frameNumber, verbosity):
 
 def cachedPgkylDataExists(cacheDir, frameNumber, fieldName):
   if cacheDir == None:
-     return False
+      return False
   else:
-     cachedFrame = cacheDir / f"{frameNumber}_{fieldName}.npy"
-     return cachedFrame.exists();
+      cachedFrame = cacheDir / f"{frameNumber}_{fieldName}.npy"
+      return cachedFrame.exists();
 
 def loadPgkylDataFromCache(cacheDir, frameNumber, fields):
   outFields = {}
   if cacheDir != None:
-     for name in fields.keys():
+      for name in fields.keys():
         if name == "fileName":
-           with open(cacheDir / f"{frameNumber}_{name}.txt", "r") as file:
-              outFields[name] = file.read().rstrip()
+            with open(cacheDir / f"{frameNumber}_{name}.txt", "r") as file:
+                outFields[name] = file.read().rstrip()
         else:
-           outFields[name] = np.load(cacheDir / f"{frameNumber}_{name}.npy")
-     return outFields
+            outFields[name] = np.load(cacheDir / f"{frameNumber}_{name}.npy")
+      return outFields
   else:
-     return None
+      return None
 
 def writePgkylDataToCache(cacheDir, frameNumber, fields):
   if cacheDir != None:
-     for name, field in fields.items():
+      for name, field in fields.items():
         if name == "fileName":
-           with open(cacheDir / f"{frameNumber}_{name}.txt", "w") as text_file:
-              text_file.write(f"{field}")
+            with open(cacheDir / f"{frameNumber}_{name}.txt", "w") as text_file:
+                text_file.write(f"{field}")
         else:
-           np.save(cacheDir / f"{frameNumber}_{name}.npy",field)
+            np.save(cacheDir / f"{frameNumber}_{name}.npy",field)
 
 # DATASET DEFINITION
 class XPointDataset(Dataset):
@@ -174,7 +174,7 @@ class XPointDataset(Dataset):
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
     def __init__(self, paramFile, fnumList, xptCacheDir=None,
-            rotateAndReflect=False, verbosity=0):
+                 rotateAndReflect=False, verbosity=0):
         """
         paramFile:   Path to parameter file (string).
         fnumList:    List of frames to iterate. 
@@ -207,11 +207,11 @@ class XPointDataset(Dataset):
             frameData = self.load(fnum)
             self.data.append(frameData)
             if rotateAndReflect:
-              self.data.append(rotate(frameData,90))
-              self.data.append(rotate(frameData,180))
-              self.data.append(rotate(frameData,270))
-              self.data.append(reflect(frameData,0))
-              self.data.append(reflect(frameData,1))
+                self.data.append(rotate(frameData,90))
+                self.data.append(rotate(frameData,180))
+                self.data.append(rotate(frameData,270))
+                self.data.append(reflect(frameData,0))
+                self.data.append(reflect(frameData,1))
 
     def __len__(self):
         return len(self.data)
@@ -225,7 +225,7 @@ class XPointDataset(Dataset):
         # check if cache exists
         if self.xptCacheDir != None:
           if not self.xptCacheDir.is_dir():
-              print(f"Xpoint cache directory {self.xptCacheDir} does not exist...  exiting")
+              print(f"Xpoint cache directory {self.xptCacheDir} does not exist...   exiting")
               sys.exit()
         t2 = timer()
 
@@ -284,8 +284,8 @@ class XPointDataset(Dataset):
             "rotation": 0,
             "reflectionAxis": -1, # no reflection
             "psi": torch.from_numpy(fields["psi"]).float().unsqueeze(0),  # Keep original for plotting
-            "all": all_torch,        # Normalized for training
-            "mask": mask_torch,      # shape [1, Nx, Ny]
+            "all": all_torch,      # Normalized for training
+            "mask": mask_torch,    # shape [1, Nx, Ny]
             "x": fields["coords"][0],
             "y": fields["coords"][1],
             "filenameBase": fields["fileName"],
@@ -367,7 +367,7 @@ class ResidualBlock(nn.Module):
         
         return out
 
-class ImprovedUNet(nn.Module):
+class UNet(nn.Module):
     """
     Improved U-Net with residual blocks and better normalization
     """
@@ -529,7 +529,7 @@ def validate_one_epoch(model, loader, criterion, device, use_amp, amp_dtype):
 
 # PLOTTING FUNCTIONS
 def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
-        reflectionAxis, filenameBase, interpFac,
+                                  reflectionAxis, filenameBase, interpFac,
                                   xpoint_mask=None, 
                                   titleExtra="",
                                   outDir="plots", 
@@ -584,7 +584,7 @@ def plot_psi_contours_and_xpoints(psi_np, x, y, params, fnum, rotation,
     plt.close()
 
 def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, filenameBase, 
-                          outDir="plots", saveFig=True):
+                           outDir="plots", saveFig=True):
     """
     Visualize model performance comparing predictions with ground truth:
     - True Positives (green)
@@ -702,50 +702,50 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
 def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
     parser.add_argument('--learningRate', type=float, default=1e-4,
-            help='specify the learning rate (default: 1e-4)')
+                        help='specify the learning rate (default: 1e-4)')
     parser.add_argument('--batchSize', type=int, default=8,
-            help='specify the batch size (default: 8)')
+                        help='specify the batch size (default: 8)')
     parser.add_argument('--epochs', type=int, default=100,
-            help='specify the number of epochs (default: 100)')
+                        help='specify the number of epochs (default: 100)')
     parser.add_argument('--trainFrameFirst', type=int, default=1,
-            help='specify the number of the first frame used for training')
+                        help='specify the number of the first frame used for training')
     parser.add_argument('--trainFrameLast', type=int, default=140,
-            help='specify the number of the last frame (exclusive) used for training')
+                        help='specify the number of the last frame (exclusive) used for training')
     parser.add_argument('--validationFrameFirst', type=int, default=141,
-            help='specify the number of the first frame used for validation')
+                        help='specify the number of the first frame used for validation')
     parser.add_argument('--validationFrameLast', type=int, default=150,
-            help='specify the number of the last frame (exclusive) used for validation')
+                        help='specify the number of the last frame (exclusive) used for validation')
     parser.add_argument('--minTrainingLoss', type=int, default=2,
-            help='''
-            minimum reduction in training loss in orders of magnitude,
-            set to 0 to disable the check (default: 2)
-            ''')
+                        help='''
+                        minimum reduction in training loss in orders of magnitude,
+                        set to 0 to disable the check (default: 2)
+                        ''')
     parser.add_argument('--checkPointFrequency', type=int, default=10,
-            help='number of epochs between checkpoints')
+                        help='number of epochs between checkpoints')
     parser.add_argument('--paramFile', type=Path, default=None,
-            help='''
-            specify the path to the parameter txt file, the parent
-            directory of that file must contain the gkyl input training data
-            ''')
+                        help='''
+                        specify the path to the parameter txt file, the parent
+                        directory of that file must contain the gkyl input training data
+                        ''')
     parser.add_argument('--xptCacheDir', type=Path, default=None,
-            help='''
-            specify the path to a directory that will be used to cache
-            the outputs of the analytic Xpoint finder
-            ''')
+                        help='''
+                        specify the path to a directory that will be used to cache
+                        the outputs of the analytic Xpoint finder
+                        ''')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction,
-            help='create figures of the ground truth X-points and model identified X-points')
+                        help='create figures of the ground truth X-points and model identified X-points')
     parser.add_argument('--plotDir', type=Path, default="./plots",
-            help='directory where figures are written')
+                        help='directory where figures are written')
     parser.add_argument('--use-amp', action='store_true',
-            help='use automatic mixed precision training')
+                        help='use automatic mixed precision training')
     parser.add_argument('--amp-dtype', type=str, default='bfloat16', 
-            choices=['float16', 'bfloat16'], help='data type for mixed precision (bfloat16 recommended)')
+                        choices=['float16', 'bfloat16'], help='data type for mixed precision (bfloat16 recommended)')
     parser.add_argument('--patience', type=int, default=15,
-            help='patience for early stopping (default: 15)')
+                        help='patience for early stopping (default: 15)')
     
     # CI TEST: Add smoke test flag
     parser.add_argument('--smoke-test', action='store_true',
-            help='Run a minimal smoke test for CI (overrides other parameters)')
+                        help='Run a minimal smoke test for CI (overrides other parameters)')
     
     args = parser.parse_args()
     return args
@@ -944,22 +944,18 @@ def main():
         # Original data loading
         train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
         val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
-
-    print(f"Loading training data from frames {args.trainFrameFirst} to {args.trainFrameLast-1}")
-    print(f"Loading validation data from frames {args.validationFrameFirst} to {args.validationFrameLast-1}")
-
-    train_dataset = XPointDataset(args.paramFile, train_fnums,
+        
+        print(f"Loading training data from frames {args.trainFrameFirst} to {args.trainFrameLast-1}")
+        print(f"Loading validation data from frames {args.validationFrameFirst} to {args.validationFrameLast-1}")
+        
+        train_dataset = XPointDataset(args.paramFile, train_fnums,
             xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
-    val_dataset   = XPointDataset(args.paramFile, val_fnums,
+        val_dataset   = XPointDataset(args.paramFile, val_fnums,
             xptCacheDir=args.xptCacheDir)
     
     # Use consistent pos_ratio for both training and validation
     train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.5, retries=30)
     val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.5, retries=30)
-        train_dataset = XPointDataset(args.paramFile, train_fnums,
-                xptCacheDir=args.xptCacheDir, rotateAndReflect=True)
-        val_dataset   = XPointDataset(args.paramFile, val_fnums,
-                xptCacheDir=args.xptCacheDir)
 
     t1 = timer()
     print("time (s) to create gkyl data loader: " + str(t1-t0))
@@ -975,7 +971,7 @@ def main():
     print(f"Using device: {device}")
     
     # Use the improved model
-    model = ImprovedUNet(input_channels=4, base_channels=32).to(device)
+    model = UNet(input_channels=4, base_channels=32).to(device)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -1001,7 +997,7 @@ def main():
 
     if use_amp:
         if args.amp_dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
-             print("Warning: bfloat16 not supported on this GPU. Falling back to float16.")
+            print("Warning: bfloat16 not supported on this GPU. Falling back to float16.")
         print(f"Using Automatic Mixed Precision (AMP) with dtype: {amp_dtype}")
 
     checkpoint_dir = "checkpoints"
@@ -1045,7 +1041,7 @@ def main():
         if val_loss[-1] < best_val_loss:
             best_val_loss = val_loss[-1]
             patience_counter = 0
-            print(f"  New best validation loss: {best_val_loss:.6f}")
+            print(f"   New best validation loss: {best_val_loss:.6f}")
             # Save best model
             torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pt"))
         else:
