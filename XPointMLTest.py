@@ -1146,59 +1146,59 @@ def main():
     t4 = timer()
 
     with torch.no_grad():
-        for item in full_dataset:
-            # item is a dict with keys: fnum, psi, mask, psi_np, mask_np, x, y, tmp, params
-            fnum     = item["fnum"]
-            rotation = item["rotation"]
-            reflectionAxis = item["reflectionAxis"]
-            psi_np   = np.array(item["psi"])[0]
-            mask_gt  = np.array(item["mask"])[0]
-            x        = item["x"]
-            y        = item["y"]
-            filenameBase      = item["filenameBase"]
-            params   = item["params"]
+        for dataset in full_dataset:  
+            for item in dataset:  
+                fnum     = item["fnum"]
+                rotation = item["rotation"]
+                reflectionAxis = item["reflectionAxis"]
+                psi_np   = np.array(item["psi"])[0]
+                mask_gt  = np.array(item["mask"])[0]
+                x        = item["x"]
+                y        = item["y"]
+                filenameBase      = item["filenameBase"]
+                params   = item["params"]
 
-            # Get CNN prediction
-            all_torch = item["all"].unsqueeze(0).to(device)
-            
-            with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
-                pred_mask = model(all_torch)
-                pred_prob = torch.sigmoid(pred_mask)
-            
-            # Convert to float32 before numpy conversion (fixes BFloat16 error)
-            pred_mask_np = pred_mask[0,0].float().cpu().numpy()
-            pred_prob_np = pred_prob.float().cpu().numpy()
+                # Get CNN prediction
+                all_torch = item["all"].unsqueeze(0).to(device)
+                
+                with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
+                    pred_mask = model(all_torch)
+                    pred_prob = torch.sigmoid(pred_mask)
+                
+                # Convert to float32 before numpy conversion (fixes BFloat16 error)
+                pred_mask_np = pred_mask[0,0].float().cpu().numpy()
+                pred_prob_np = pred_prob.float().cpu().numpy()
 
-            pred_mask_bin = (pred_prob_np[0,0] > 0.5).astype(np.float32)
+                pred_mask_bin = (pred_prob_np[0,0] > 0.5).astype(np.float32)
 
-            print(f"Frame {fnum} rotation {rotation} reflectionAxis {reflectionAxis}:")
-            print(f"  Probabilities - min: {pred_prob_np.min():.5f}, max: {pred_prob_np.max():.5f}, mean: {pred_prob_np.mean():.5f}")
-            print(f"  Binary Mask (X-points) - count of 1s: {np.sum(pred_mask_bin)} / {pred_mask_bin.size} pixels")
+                print(f"Frame {fnum} rotation {rotation} reflectionAxis {reflectionAxis}:")
+                print(f"  Probabilities - min: {pred_prob_np.min():.5f}, max: {pred_prob_np.max():.5f}, mean: {pred_prob_np.mean():.5f}")
+                print(f"  Binary Mask (X-points) - count of 1s: {np.sum(pred_mask_bin)} / {pred_mask_bin.size} pixels")
 
-            if args.plot:
-                # Plot GROUND TRUTH
-                plot_psi_contours_and_xpoints(
-                    psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
-                    xpoint_mask=mask_gt,
-                    titleExtra="GTXpoints",
-                    outDir=outDir,
-                    saveFig=True
-                )
+                if args.plot:
+                    # Plot GROUND TRUTH
+                    plot_psi_contours_and_xpoints(
+                        psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
+                        xpoint_mask=mask_gt,
+                        titleExtra="GTXpoints",
+                        outDir=outDir,
+                        saveFig=True
+                    )
 
-                # Plot CNN PREDICTIONS
-                plot_psi_contours_and_xpoints(
-                    psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
-                    xpoint_mask=pred_mask_bin,
-                    titleExtra="CNNXpoints",
-                    outDir=outDir,
-                    saveFig=True
-                )
+                    # Plot CNN PREDICTIONS
+                    plot_psi_contours_and_xpoints(
+                        psi_np, x, y, params, fnum, rotation, reflectionAxis, filenameBase, interpFac,
+                        xpoint_mask=pred_mask_bin,
+                        titleExtra="CNNXpoints",
+                        outDir=outDir,
+                        saveFig=True
+                    )
 
-                plot_model_performance(
-                    psi_np, pred_prob_np, mask_gt, x, y, params, fnum, filenameBase,
-                    outDir=outDir,
-                    saveFig=True
-                )
+                    plot_model_performance(
+                        psi_np, pred_prob_np, mask_gt, x, y, params, fnum, filenameBase,
+                        outDir=outDir,
+                        saveFig=True
+                    )
 
     t5 = timer()
     print("time (s) to apply model: " + str(t5-t4))

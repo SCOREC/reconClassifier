@@ -80,9 +80,59 @@ run it
 ./runReconClass.sh
 ```
 
+## Command Line Options
+
+The classifier supports several command line options for training configuration:
+
+### Training Parameters
+- `--learningRate`: Learning rate for training (default: 1e-4)
+- `--batchSize`: Batch size for training (default: 8)
+- `--epochs`: Number of training epochs (default: 100)
+- `--minTrainingLoss`: Minimum reduction in training loss in orders of magnitude (default: 2, set to 0 to disable check)
+
+### Data Configuration
+- `--trainFrameFirst`: First frame number for training data (default: 1)
+- `--trainFrameLast`: Last frame number (exclusive) for training data (default: 140)
+- `--validationFrameFirst`: First frame number for validation data (default: 141)
+- `--validationFrameLast`: Last frame number (exclusive) for validation data (default: 150)
+- `--paramFile`: Path to the parameter txt file containing gkyl input data
+- `--xptCacheDir`: Path to directory for caching X-point finder outputs
+
+### Training Optimization
+- `--use-amp`: Enable automatic mixed precision training for faster training on modern GPUs
+- `--amp-dtype`: Data type for mixed precision (`float16` or `bfloat16`, default: `bfloat16`)
+- `--patience`: Patience for early stopping (default: 15 epochs)
+
+### Output and Monitoring
+- `--plot`: Enable creation of figures showing ground truth and model-identified X-points
+- `--plotDir`: Directory where figures are written (default: `./plots`)
+- `--checkPointFrequency`: Number of epochs between model checkpoints (default: 10)
+
+### Testing
+- `--smoke-test`: Run minimal smoke test for CI (overrides other parameters for quick validation)
+
+### Example with Advanced Options
+
+For faster training with mixed precision and early stopping:
+
+```bash
+python -u ${rcRoot}/reconClassifier/XPointMLTest.py \
+--paramFile=/path/to/params.txt \
+--xptCacheDir=/path/to/cache \
+--epochs 200 \
+--learningRate 1e-4 \
+--batchSize 16 \
+--use-amp \
+--amp-dtype bfloat16 \
+--patience 20 \
+--plot \
+--trainFrameLast 100 \
+--validationFrameLast 120
+```
+
 ## Resuming Development Work
 
-The following commands should be run on `checkers` **every time you create a new shell** to resume work in the existing virtual environment.
+The following commands should be run on `checkers` **every time you create a new shell** to resume work in the existing virtual environment.
 
 ```
 cd nsfCssiMlClassifier
