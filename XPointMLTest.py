@@ -283,7 +283,7 @@ class XPointDataset(Dataset):
             "fnum": fnum,
             "rotation": 0,
             "reflectionAxis": -1, # no reflection
-            "psi": torch.from_numpy(fields["psi"]).float().unsqueeze(0),  # Keep original for plotting
+            "psi": psi_torch,      # shape [1, Nx, Ny]
             "all": all_torch,      # Normalized for training
             "mask": mask_torch,    # shape [1, Nx, Ny]
             "x": fields["coords"][0],
@@ -333,7 +333,11 @@ class XPointPatchDataset(Dataset):
                     "mask": crop_mask
                 }
 
-# 2) IMPROVED U-NET ARCHITECTURE WITH RESIDUAL CONNECTIONS
+
+# Improved the U-Net architecture with residual connections
+#   Links to understand the residual blocks:
+#   https://code.likeagirl.io/u-net-vs-residual-u-net-vs-attention-u-net-vs-attention-residual-u-net-899b57c5698
+#   https://notes.kvfrans.com/3-building-blocks/residual-networks.html
 class ResidualBlock(nn.Module):
     """Residual block with two convolutions and skip connection"""
     def __init__(self, in_channels, out_channels):
