@@ -705,12 +705,12 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
 
 def parseCommandLineArgs():
     parser = argparse.ArgumentParser(description='ML-based reconnection classifier')
-    parser.add_argument('--learningRate', type=float, default=1e-4,
-                        help='specify the learning rate (default: 1e-4)')
-    parser.add_argument('--batchSize', type=int, default=8,
-                        help='specify the batch size (default: 8)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='specify the number of epochs (default: 100)')
+    parser.add_argument('--learningRate', type=float, default=1e-5,
+                        help='specify the learning rate')
+    parser.add_argument('--batchSize', type=int, default=1,
+                        help='specify the batch size')
+    parser.add_argument('--epochs', type=int, default=2000,
+                        help='specify the number of epochs')
     parser.add_argument('--trainFrameFirst', type=int, default=1,
                         help='specify the number of the first frame used for training')
     parser.add_argument('--trainFrameLast', type=int, default=140,
@@ -719,10 +719,10 @@ def parseCommandLineArgs():
                         help='specify the number of the first frame used for validation')
     parser.add_argument('--validationFrameLast', type=int, default=150,
                         help='specify the number of the last frame (exclusive) used for validation')
-    parser.add_argument('--minTrainingLoss', type=int, default=2,
+    parser.add_argument('--minTrainingLoss', type=int, default=3,
                         help='''
                         minimum reduction in training loss in orders of magnitude,
-                        set to 0 to disable the check (default: 2)
+                        set to 0 to disable the check (default: 3)
                         ''')
     parser.add_argument('--checkPointFrequency', type=int, default=10,
                         help='number of epochs between checkpoints')
