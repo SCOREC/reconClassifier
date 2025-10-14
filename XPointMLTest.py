@@ -25,6 +25,9 @@ from torch.amp import autocast, GradScaler
 
 from ci_tests import SyntheticXPointDataset, test_checkpoint_functionality
 
+# Import benchmark module
+from benchmark import TrainingBenchmark
+
 def expand_xpoints_mask(binary_mask, kernel_size=9):
     """
     Expands each X-point in a binary mask to include surrounding cells
@@ -481,11 +484,17 @@ class DiceLoss(nn.Module):
         return 1.0 - dice
 
 # TRAIN & VALIDATION UTILS
-def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp, amp_dtype):
+def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark=None):
     model.train()
     running_loss = 0.0
     
+    # Start epoch timing for benchmark
+    if benchmark:
+        benchmark.start_epoch()
+    
     for batch in loader:
+        batch_start = timer()
+        
         all_data, mask = batch["all"].to(device), batch["mask"].to(device)
         
         with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
@@ -514,6 +523,15 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp
             optimizer.step()
         
         running_loss += loss.item()
+        
+        # Record batch timing for benchmark
+        if benchmark:
+            batch_time = timer() - batch_start
+            benchmark.record_batch(all_data.size(0), batch_time)
+    
+    # End epoch timing for benchmark
+    if benchmark:
+        benchmark.end_epoch()
     
     return running_loss / len(loader) if len(loader) > 0 else 0.0
 
@@ -672,20 +690,20 @@ def plot_model_performance(psi_np, pred_prob_np, mask_gt, x, y, params, fnum, fi
     
     plt.close()
 
-def plot_training_history(train_losses, val_losses, save_path='plots/training_history.png'):
+def plot_training_history(train_losses, val_loss, save_path='plots/training_history.png'):
     """
     Plots training and validation losses across epochs.
     
     Parameters:
     train_losses (list): List of training losses for each epoch
-    val_losses (list): List of validation losses for each epoch
+    val_loss (list): List of validation losses for each epoch
     save_path (str): Path to save the resulting plot
     """
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_losses) + 1)
     
     plt.plot(epochs, train_losses, 'b-', label='Training Loss')
-    plt.plot(epochs, val_losses, 'r-', label='Validation Loss')
+    plt.plot(epochs, val_loss, 'r-', label='Validation Loss')
     
     plt.title('Training and Validation Loss')
     plt.xlabel('Epochs')
@@ -695,8 +713,8 @@ def plot_training_history(train_losses, val_losses, save_path='plots/training_hi
     plt.grid(True, linestyle='--', alpha=0.7)
     
     # Add some padding to y-axis to make visualization clearer
-    ymin = min(min(train_losses), min(val_losses)) * 0.9
-    ymax = max(max(train_losses), max(val_losses)) * 1.1
+    ymin = min(min(train_losses), min(val_loss)) * 0.9
+    ymax = max(max(train_losses), max(val_loss)) * 1.1
     plt.ylim(ymin, ymax)
     
     plt.savefig(save_path, dpi=300)
@@ -746,6 +764,10 @@ def parseCommandLineArgs():
                         choices=['float16', 'bfloat16'], help='data type for mixed precision (bfloat16 recommended)')
     parser.add_argument('--patience', type=int, default=15,
                         help='patience for early stopping (default: 15)')
+    parser.add_argument('--benchmark', action='store_true',
+                        help='enable performance benchmarking (tracks timing, throughput, GPU memory)')
+    parser.add_argument('--benchmark-output', type=Path, default='./benchmark_results.json',
+                        help='path to save benchmark results JSON file (default: ./benchmark_results.json)')
     
     # CI TEST: Add smoke test flag
     parser.add_argument('--smoke-test', action='store_true',
@@ -974,6 +996,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # Initialize benchmark tracker
+    benchmark = TrainingBenchmark(device, enabled=args.benchmark)
+    if args.benchmark:
+        benchmark.print_hardware_info()
+    
     # Use the improved model
     model = UNet(input_channels=4, base_channels=32).to(device)
     
@@ -1028,14 +1055,21 @@ def main():
     
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
-        train_loss_epoch = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler, use_amp, amp_dtype)
+        train_loss_epoch = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark)
         val_loss_epoch = validate_one_epoch(model, val_loader, criterion, device, use_amp, amp_dtype)
         
         train_loss.append(train_loss_epoch)
         val_loss.append(val_loss_epoch)
         
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"[Epoch {epoch+1}/{num_epochs}] LR={current_lr:.2e} TrainLoss={train_loss[-1]:.6f} ValLoss={val_loss[-1]:.6f}")
+        
+        # Enhanced logging with benchmark metrics
+        log_msg = f"[Epoch {epoch+1}/{num_epochs}] LR={current_lr:.2e} TrainLoss={train_loss[-1]:.6f} ValLoss={val_loss[-1]:.6f}"
+        if args.benchmark:
+            throughput = benchmark.get_throughput()
+            gpu_mem = benchmark.get_gpu_memory_usage()
+            log_msg += f" | Throughput={throughput:.2f} samples/s | GPU Mem={gpu_mem:.2f} GB"
+        print(log_msg)
         
         # Learning rate scheduling
         scheduler.step()
@@ -1059,8 +1093,12 @@ def main():
             print(f"Early stopping triggered after {epoch+1} epochs (patience={args.patience})")
             break
 
-    plot_training_history(train_loss, val_loss)
+    plot_training_history(train_loss, val_loss, save_path='plots/training_history.png')
     print("time (s) to train model: " + str(timer()-t2))
+    
+    # Print and save benchmark summary
+    if args.benchmark:
+        benchmark.print_summary(output_file=args.benchmark_output)
 
     # CI TEST: Run additional tests if in smoke test mode
     if args.smoke_test:
@@ -1139,7 +1177,7 @@ def main():
     outDir = "plots"
     interpFac = 1  
 
-    # Evaluate on combined set for demonstration. Exam this part to see if save to remove
+    # Evaluate on combined set for demonstration
     if not args.smoke_test:
         train_fnums = range(args.trainFrameFirst, args.trainFrameLast)
         val_fnums   = range(args.validationFrameFirst, args.validationFrameLast)
@@ -1174,10 +1212,6 @@ def main():
                 pred_prob_np = pred_prob.float().cpu().numpy()
 
                 pred_mask_bin = (pred_prob_np[0,0] > 0.5).astype(np.float32)
-
-                print(f"Frame {fnum} rotation {rotation} reflectionAxis {reflectionAxis}:")
-                print(f"  Probabilities - min: {pred_prob_np.min():.5f}, max: {pred_prob_np.max():.5f}, mean: {pred_prob_np.mean():.5f}")
-                print(f"  Binary Mask (X-points) - count of 1s: {np.sum(pred_mask_bin)} / {pred_mask_bin.size} pixels")
 
                 if args.plot:
                     # Plot GROUND TRUTH
