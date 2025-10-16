@@ -28,6 +28,9 @@ from ci_tests import SyntheticXPointDataset, test_checkpoint_functionality
 # Import benchmark module
 from benchmark import TrainingBenchmark
 
+# Import evaluation metrics module
+from eval_metrics import ModelEvaluator, evaluate_model_on_dataset
+
 def expand_xpoints_mask(binary_mask, kernel_size=9):
     """
     Expands each X-point in a binary mask to include surrounding cells
@@ -768,6 +771,8 @@ def parseCommandLineArgs():
                         help='enable performance benchmarking (tracks timing, throughput, GPU memory)')
     parser.add_argument('--benchmark-output', type=Path, default='./benchmark_results.json',
                         help='path to save benchmark results JSON file (default: ./benchmark_results.json)')
+    parser.add_argument('--eval-output', type=Path, default='./evaluation_metrics.json',
+                        help='path to save evaluation metrics JSON file (default: ./evaluation_metrics.json)')
     
     # CI TEST: Add smoke test flag
     parser.add_argument('--smoke-test', action='store_true',
@@ -1171,6 +1176,65 @@ def main():
     if os.path.exists(best_model_path):
         print("Loading best model for evaluation...")
         model.load_state_dict(torch.load(best_model_path, weights_only=True))
+
+    # new evaluation code
+    # Evaluate model performance
+    if not args.smoke_test:
+        # print("\n" + "="*70)
+        # print("RUNNING MODEL EVALUATION")
+        # print("="*70)
+        
+        # # Evaluate on validation set
+        # print("\nEvaluating on validation set...")
+        val_evaluator = evaluate_model_on_dataset(
+            model, 
+            val_dataset,  # Use original dataset, not patch dataset
+            device, 
+            use_amp=use_amp, 
+            amp_dtype=amp_dtype,
+            threshold=0.5
+        )
+        
+        # Print and save validation metrics
+        val_evaluator.print_summary()
+        val_evaluator.save_json(args.eval_output)
+        
+        # Evaluate on training set
+        print("\nEvaluating on training set...")
+        train_evaluator = evaluate_model_on_dataset(
+            model, 
+            train_dataset,
+            device, 
+            use_amp=use_amp, 
+            amp_dtype=amp_dtype,
+            threshold=0.5
+        )
+        
+        # Print and save training metrics
+        train_evaluator.print_summary()
+        train_eval_path = args.eval_output.parent / f"train_{args.eval_output.name}"
+        train_evaluator.save_json(train_eval_path)
+        
+        # Compare training vs validation to check for overfitting
+        train_global = train_evaluator.get_global_metrics()
+        val_global = val_evaluator.get_global_metrics()
+        
+        print("\n" + "="*70)
+        print("OVERFITTING CHECK")
+        print("="*70)
+        print(f"Training F1:      {train_global['f1_score']:.4f}")
+        print(f"Validation F1:    {val_global['f1_score']:.4f}")
+        print(f"Difference:       {abs(train_global['f1_score'] - val_global['f1_score']):.4f}")
+        
+        if train_global['f1_score'] - val_global['f1_score'] > 0.05:
+            print("⚠ Warning: Possible overfitting detected (train F1 >> val F1)")
+        elif val_global['f1_score'] - train_global['f1_score'] > 0.05:
+            print("⚠ Warning: Unusual pattern (val F1 >> train F1)")
+        else:
+            print("✓ Model generalizes well to validation set")
+        print("="*70 + "\n")
+    
+    # ==================== END NEW EVALUATION CODE ====================
 
     # (D) Plotting after training
     model.eval() # switch to inference mode
