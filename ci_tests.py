@@ -3,6 +3,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import os
+import sys
+# Local import within the function itself, which is a bit clunky
+# but the original code did it this way.
+# from XPointMLTest import validate_one_epoch 
 
 class SyntheticXPointDataset(Dataset):
     """
@@ -50,7 +54,7 @@ class SyntheticXPointDataset(Dataset):
         
         #create synthetic current (Laplacian of psi)
         jz = -(np.gradient(np.gradient(psi, axis=0), axis=0) + 
-               np.gradient(np.gradient(psi, axis=1), axis=1))
+                np.gradient(np.gradient(psi, axis=1), axis=1))
         
         # create X-point mask
         mask = np.zeros((H, W), dtype=np.float32)
@@ -97,18 +101,22 @@ def test_checkpoint_functionality(model, optimizer, device, val_loader, criterio
     
     """
     # Import locally to prevent circular dependency
-    from XPointMLTest import validate_one_epoch
+    from XPointMLTest import validate_one_epoch, autocast
     
     print("\n" + "="*60)
     print("TESTING CHECKPOINT SAVE/LOAD FUNCTIONALITY")
     print("="*60)
     
-    #get initial validation loss
+    # Get the AMP settings from the model's current state to pass to validate_one_epoch
+    use_amp = isinstance(scaler, torch.cuda.amp.GradScaler)
+    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+    # Get initial validation loss
     model.eval()
-    initial_loss = validate_one_epoch(model, val_loader, criterion, device)
+    initial_loss = validate_one_epoch(model, val_loader, criterion, device, use_amp, amp_dtype)
     print(f"Initial validation loss: {initial_loss:.6f}")
     
-    #saves checkpoint
+    # Save checkpoint with the correct AMP components
     test_checkpoint_path = "smoke_test_checkpoint.pt"
     checkpoint = {
         'model_state_dict': model.state_dict(),
@@ -117,24 +125,36 @@ def test_checkpoint_functionality(model, optimizer, device, val_loader, criterio
         'test_value': 42
     }
     
+    if scaler is not None:
+        checkpoint['scaler_state_dict'] = scaler.state_dict()
+    
     torch.save(checkpoint, test_checkpoint_path)
     print(f"Saved checkpoint to {test_checkpoint_path}")
     
     # create new model and optimizer
-    model2 = UNet(input_channels=4, base_channels=64).to(device)
+    # NOTE: The base_channels here should match the original model's base_channels (32).
+    # You had 64, which would cause an error later. Changed to 32.
+    model2 = UNet(input_channels=4, base_channels=32).to(device) 
     optimizer2 = Adam(model2.parameters(), lr=1e-5)
     
     # load checkpoint
     loaded_checkpoint = torch.load(test_checkpoint_path, map_location=device, weights_only=False)
     model2.load_state_dict(loaded_checkpoint['model_state_dict'])
     optimizer2.load_state_dict(loaded_checkpoint['optimizer_state_dict'])
+
+    # Load the scaler state if present
+    scaler2 = None
+    if 'scaler_state_dict' in loaded_checkpoint:
+        scaler2 = torch.cuda.amp.GradScaler()
+        scaler2.load_state_dict(loaded_checkpoint['scaler_state_dict'])
     
     assert loaded_checkpoint['test_value'] == 42, "Test value mismatch!"
     print("Checkpoint test value verified")
     
     #get loaded model validation loss
     model2.eval()
-    loaded_loss = validate_one_epoch(model2, val_loader, criterion, device)
+    # Now pass the AMP arguments to validate_one_epoch
+    loaded_loss = validate_one_epoch(model2, val_loader, criterion, device, use_amp, amp_dtype)
     print(f"Loaded model validation loss: {loaded_loss:.6f}")
     
     # check if losses match
