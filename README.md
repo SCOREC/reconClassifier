@@ -108,6 +108,11 @@ The classifier supports several command line options for training configuration:
 - `--plotDir`: Directory where figures are written (default: `./plots`)
 - `--checkPointFrequency`: Number of epochs between model checkpoints (default: 10)
 
+### Performance Benchmarking
+- `--benchmark`: Enable performance benchmarking (tracks timing, throughput, GPU memory)
+- `--benchmark-output`: Path to save benchmark results JSON file (default: `./benchmark_results.json`)
+- `--eval-output`: Path to save evaluation metrics JSON file (default: `./evaluation_metrics.json`)
+
 ### Testing
 - `--smoke-test`: Run minimal smoke test for CI (overrides other parameters for quick validation)
 
@@ -139,3 +144,50 @@ cd nsfCssiMlClassifier
 source envPyTorch.sh
 source pgkyl/bin/activate
 ```
+
+## Model Evaluation Metrics
+
+The model evaluation system measures how well the classifier identifies X-points (magnetic reconnection sites) by treating it as a pixel-level binary classification problem.
+
+### Key Metrics
+
+The evaluation outputs several metrics saved to JSON files:
+
+- **Accuracy**: Overall pixel classification correctness (can be misleading due to class imbalance)
+- **Precision**: Fraction of detected X-points that are correct (measures false alarm rate)
+- **Recall**: Fraction of actual X-points that were found (measures miss rate)
+- **F1 Score**: Harmonic mean of precision and recall (balanced performance metric)
+- **IoU**: Intersection over Union - spatial overlap quality between predicted and actual X-point regions
+
+### Understanding the Results
+
+**Good performance indicators:**
+- F1 Score > 0.8
+- IoU > 0.5  
+- Similar metrics between training and validation sets (no overfitting)
+- Low standard deviation across frames (consistent performance)
+
+**Warning signs:**
+- Large gap between training and validation metrics (overfitting)
+- High precision but low recall (too conservative, missing X-points)
+- Low precision but high recall (too aggressive, many false alarms)
+- High frame-to-frame variation (inconsistent detection)
+
+### Output Files
+
+After training, the model produces:
+- `evaluation_metrics.json`: Validation set performance
+- `train_evaluation_metrics.json`: Training set performance  
+- Performance plots in the `plots/` directory showing:
+  - Training history (loss curves)
+  - Model predictions vs ground truth
+  - True positives (green), false positives (red), false negatives (yellow)
+
+### Physics Context
+
+For reconnection studies:
+- **High recall is critical**: Missing X-points means missing reconnection events
+- **Precision affects analysis**: False positives corrupt downstream calculations
+- **IoU indicates localization**: Poor IoU means inaccurate X-point positions
+
+The model uses a 9×9 pixel expansion around X-points to account for localization uncertainty while still requiring accurate region identification.
