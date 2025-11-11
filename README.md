@@ -86,8 +86,8 @@ The classifier supports several command line options for training configuration:
 
 ### Training Parameters
 - `--learningRate`: Learning rate for training (default: 1e-5)
-- `--weightDecay`: Weight decay for L2 regularization (default: 1e-4)
-- `--dropoutRate`: Dropout rate for regularization (default: 0.2)
+- `--weightDecay`: Weight decay for L2 regularization (default: 5e-4)
+- `--dropoutRate`: Dropout rate for regularization (default: 0.3)
 - `--batchSize`: Batch size for training (default: 1)
 - `--epochs`: Number of training epochs (default: 2000)
 - `--minTrainingLoss`: Minimum reduction in training loss in orders of magnitude (default: 3, set to 0 to disable check)
@@ -110,7 +110,7 @@ The classifier supports several command line options for training configuration:
 ### Output and Monitoring
 - `--plot`: Enable creation of figures showing ground truth and model-identified X-points
 - `--plotDir`: Directory where figures are written (default: `./plots`)
-- `--checkPointFrequency`: Number of epochs between model checkpoints (default: 10)
+- `--checkPointFrequency`: Number of epochs between model checkpoints (default: 100)
 
 ### Performance Benchmarking
 - `--benchmark`: Enable performance benchmarking (tracks timing, throughput, GPU memory)
