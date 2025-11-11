@@ -503,7 +503,7 @@ class UNet(nn.Module):
     """
     Improved U-Net with residual blocks and better normalization
     """
-    def __init__(self, input_channels=4, base_channels=32, dropout_rate=0.2):
+    def __init__(self, input_channels=4, base_channels=32, *, dropout_rate):
         super().__init__()
         
         # Encoder
