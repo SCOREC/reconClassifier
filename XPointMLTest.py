@@ -881,7 +881,7 @@ def parseCommandLineArgs():
                         minimum reduction in training loss in orders of magnitude,
                         set to 0 to disable the check (default: 3)
                         ''')
-    parser.add_argument('--checkPointFrequency', type=int, default=10,
+    parser.add_argument('--checkPointFrequency', type=int, default=100,
                         help='number of epochs between checkpoints')
     parser.add_argument('--paramFile', type=Path, default=None,
                         help='''
