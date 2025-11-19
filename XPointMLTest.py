@@ -381,8 +381,8 @@ class XPointPatchDataset(Dataset):
             return all_data, mask
         
         # 1. Random rotation (0, 90, 180, 270 degrees)
-        # 75% chance to apply rotation
-        if self.rng.random() < 0.75:
+        # 50% chance to apply rotation
+        if self.rng.random() < 0.50:
             k = self.rng.integers(1, 4)  # 1, 2, or 3 (90°, 180°, 270°)
             all_data = torch.rot90(all_data, k=k, dims=(-2, -1))
             mask = torch.rot90(mask, k=k, dims=(-2, -1))
@@ -397,9 +397,9 @@ class XPointPatchDataset(Dataset):
             all_data = torch.flip(all_data, dims=(-2,))
             mask = torch.flip(mask, dims=(-2,))
         
-        # 4. Add Gaussian noise (30% chance)
+        # 4. Add Gaussian noise (10% chance)
         # Small noise helps prevent overfitting to exact pixel values
-        if self.rng.random() < 0.3:
+        if self.rng.random() < 0.1:
             noise_std = self.rng.uniform(0.005, 0.02)
             noise = torch.randn_like(all_data) * noise_std
             all_data = all_data + noise
@@ -413,9 +413,9 @@ class XPointPatchDataset(Dataset):
                 mean = all_data[c].mean()
                 all_data[c] = contrast * (all_data[c] - mean) + mean + brightness
         
-        # 6. Cutout/Random erasing (20% chance)
+        # 6. Cutout/Random erasing (5% chance)
         # Prevents model from relying too heavily on specific spatial features
-        if self.rng.random() < 0.2:
+        if self.rng.random() < 0.05:
             h, w = all_data.shape[-2:]
             cutout_size = int(min(h, w) * self.rng.uniform(0.1, 0.25))
             if cutout_size > 0:
