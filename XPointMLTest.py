@@ -31,6 +31,9 @@ from benchmark import TrainingBenchmark
 # Import evaluation metrics module
 from eval_metrics import ModelEvaluator, evaluate_model_on_dataset
 
+# Import git utils
+from git_utils import print_git_info
+
 def set_seed(seed):
     """
     Set random seed for reproducibility across all libraries
@@ -1070,6 +1073,11 @@ def load_model_checkpoint(model, optimizer, checkpoint_path, scaler=None):
 
 
 def main():
+    # Print git repository information
+    # Use the directory of the current script as the repo path
+    repo_path = os.path.dirname(os.path.abspath(__file__))
+    print_git_info(repo_path)
+
     args = parseCommandLineArgs()
     
     # Set seed for reproducibility
