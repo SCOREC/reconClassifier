@@ -1,6 +1,10 @@
 import subprocess
 import os
 
+"""
+References::
+https://gitpython.readthedocs.io/en/stable/tutorial.html
+"""
 def get_git_info(repo_path='.'):
     """
     Retrieves git information: commit hash, remote URL, and branch name.
