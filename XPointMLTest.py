@@ -452,7 +452,9 @@ class XPointPatchDataset(Dataset):
             want_pos  = (attempt / self.retries) < self.pos_ratio
 
             if has_pos == want_pos or attempt == self.retries - 1:
-                all_crop = self._crop(frame["all"], y0, x0)
+                # Clone to avoid in-place augmentation modifying cached base frames
+                all_crop = self._crop(frame["all"], y0, x0).clone()
+                crop_mask = crop_mask.clone()
                 
                 # Apply augmentation if enabled
                 all_crop, crop_mask = self._apply_augmentation(all_crop, crop_mask)
