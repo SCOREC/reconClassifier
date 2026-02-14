@@ -362,6 +362,13 @@ class XPointPatchDataset(Dataset):
         # give each full frame K random crops per epoch (K=32 for more samples)
         return len(self.base_ds) * 32
 
+    def reset_rng(self, seed=None):
+        """Reset RNG for deterministic cropping (useful for fixed validation)."""
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        else:
+            self.rng = np.random.default_rng()
+
     def _crop(self, arr, top, left):
         return arr[..., top:top+self.patch, left:left+self.patch]
 
@@ -906,6 +913,17 @@ def parseCommandLineArgs():
                         choices=['float16', 'bfloat16'], help='data type for mixed precision (bfloat16 recommended)')
     parser.add_argument('--patience', type=int, default=15,
                         help='patience for early stopping (default: 15)')
+    parser.add_argument('--early-stop-min-delta', type=float, default=0.0,
+                        help='minimum improvement in validation loss to reset early stopping (default: 0.0)')
+    parser.add_argument('--scheduler', type=str, default='cosine',
+                        choices=['cosine', 'plateau'],
+                        help='learning rate scheduler type (cosine or plateau)')
+    parser.add_argument('--plateau-factor', type=float, default=0.5,
+                        help='ReduceLROnPlateau factor (default: 0.5)')
+    parser.add_argument('--plateau-patience', type=int, default=5,
+                        help='ReduceLROnPlateau patience in epochs (default: 5)')
+    parser.add_argument('--plateau-min-lr', type=float, default=1e-6,
+                        help='ReduceLROnPlateau minimum learning rate (default: 1e-6)')
     parser.add_argument('--benchmark', action='store_true',
                         help='enable performance benchmarking (tracks timing, throughput, GPU memory)')
     parser.add_argument('--benchmark-output', type=Path, default='./benchmark_results.json',
@@ -914,6 +932,8 @@ def parseCommandLineArgs():
                         help='path to save evaluation metrics JSON file (default: ./evaluation_metrics.json)')
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for reproducibility (default: None for non-deterministic)')
+    parser.add_argument('--fixed-val-crops', action=argparse.BooleanOptionalAction, default=False,
+                        help='use deterministic validation crops each epoch (default: False)')
     parser.add_argument('--require-gpu', action='store_true',
                         help='require GPU to be available, exit if not found')
     
@@ -967,6 +987,22 @@ def checkCommandLineArgs(args):
 
     if args.minTrainingLoss < 0:
       print(f"minTrainingLoss must be >= 0... exiting")
+      sys.exit()
+
+    if args.early_stop_min_delta < 0:
+      print("early-stop-min-delta must be >= 0... exiting")
+      sys.exit()
+
+    if args.plateau_factor <= 0 or args.plateau_factor >= 1:
+      print("plateau-factor must be in (0, 1)... exiting")
+      sys.exit()
+
+    if args.plateau_patience < 0:
+      print("plateau-patience must be >= 0... exiting")
+      sys.exit()
+
+    if args.plateau_min_lr < 0:
+      print("plateau-min-lr must be >= 0... exiting")
       sys.exit()
 
     if args.checkPointFrequency < 0:
@@ -1144,6 +1180,7 @@ def main():
     print(f"number of training patches per epoch: {len(train_crop)}")
     print(f"number of validation patches per epoch: {len(val_crop)}")
     print(f"Data augmentation: ENABLED for training, DISABLED for validation")
+    print(f"Validation cropping: {'FIXED' if args.fixed_val_crops else 'RANDOM'} per epoch")
     if args.seed is not None:
         print(f"Random seed: {args.seed} (reproducible mode)")
     else:
@@ -1192,8 +1229,19 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.learningRate, weight_decay=args.weightDecay)
     print(f"Optimizer: AdamW with learning_rate={args.learningRate}, weight_decay={args.weightDecay}")
     
-    # Learning rate scheduler with cosine annealing
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    # Learning rate scheduler
+    if args.scheduler == 'plateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=args.plateau_factor,
+            patience=args.plateau_patience,
+            min_lr=args.plateau_min_lr
+        )
+        print(f"Scheduler: ReduceLROnPlateau (factor={args.plateau_factor}, patience={args.plateau_patience}, min_lr={args.plateau_min_lr})")
+    else:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+        print("Scheduler: CosineAnnealingLR")
     
     # --- AMP Setup (bfloat16 aware) ---
     use_amp = args.use_amp and torch.cuda.is_available()
@@ -1216,7 +1264,7 @@ def main():
     best_val_loss = float('inf')
 
     if os.path.exists(latest_checkpoint_path) and not args.smoke_test:
-        model, optimizer, start_epoch, train_loss, val_loss = load_model_checkpoint(
+        model, optimizer, start_epoch, train_loss, val_loss, scaler, best_val_loss = load_model_checkpoint(
             model, optimizer, latest_checkpoint_path
         )
         print(f"Resuming training from epoch {start_epoch+1}")
@@ -1233,6 +1281,9 @@ def main():
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
         train_loss_epoch = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark)
+        if args.fixed_val_crops:
+            val_seed = args.seed if args.seed is not None else 0
+            val_crop.reset_rng(val_seed)
         val_loss_epoch = validate_one_epoch(model, val_loader, criterion, device, use_amp, amp_dtype)
         
         train_loss.append(train_loss_epoch)
@@ -1249,10 +1300,13 @@ def main():
         print(log_msg)
         
         # Learning rate scheduling
-        scheduler.step()
+        if args.scheduler == 'plateau':
+            scheduler.step(val_loss_epoch)
+        else:
+            scheduler.step()
         
         # Check for improvement
-        if val_loss[-1] < best_val_loss:
+        if val_loss[-1] < best_val_loss - args.early_stop_min_delta:
             best_val_loss = val_loss[-1]
             patience_counter = 0
             print(f"   New best validation loss: {best_val_loss:.6f}")
