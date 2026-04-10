@@ -329,7 +329,8 @@ class XPointDataset(Dataset):
 
 class XPointPatchDataset(Dataset):
     """On‑the‑fly square crops with data augmentation, balancing positive / background patches."""
-    def __init__(self, base_ds, patch=64, pos_ratio=0.5, retries=30, augment=False, seed=None):
+    def __init__(self, base_ds, patch=64, pos_ratio=0.5, retries=30, augment=False, seed=None,
+                 noise_std_max=0.02, cutout_prob=0.20):
         """
         Parameters:
         -----------
@@ -345,12 +346,18 @@ class XPointPatchDataset(Dataset):
             If True, apply on-the-fly data augmentation (use for training only)
         seed : int or None
             Random seed for reproducibility (None for non-deterministic)
+        noise_std_max : float
+            Maximum std for Gaussian noise augmentation (default: 0.02)
+        cutout_prob : float
+            Probability of applying cutout augmentation (default: 0.20)
         """
         self.base_ds   = base_ds
         self.patch     = patch
         self.pos_ratio = pos_ratio
         self.retries   = retries
         self.augment   = augment
+        self.noise_std_max = noise_std_max
+        self.cutout_prob = cutout_prob
         
         # Initialize RNG with seed if provided
         if seed is not None:
@@ -407,7 +414,7 @@ class XPointPatchDataset(Dataset):
         # 4. Add Gaussian noise (30% chance)
         # Small noise helps prevent overfitting to exact pixel values
         if self.rng.random() < 0.3:
-            noise_std = self.rng.uniform(0.005, 0.02)
+            noise_std = self.rng.uniform(0.005, self.noise_std_max)
             noise = torch.randn_like(all_data) * noise_std
             all_data = all_data + noise
         
@@ -421,9 +428,9 @@ class XPointPatchDataset(Dataset):
             mean = all_data.mean(dim=(-2, -1), keepdim=True)
             all_data = contrast * (all_data - mean) + mean + brightness
         
-        # 6. Cutout/Random erasing (20% chance)
+        # 6. Cutout/Random erasing
         # Prevents model from relying too heavily on specific spatial features
-        if self.rng.random() < 0.20:
+        if self.rng.random() < self.cutout_prob:
             h, w = all_data.shape[-2:]
             cutout_size = int(min(h, w) * self.rng.uniform(0.1, 0.25))
             if cutout_size > 0:
@@ -627,6 +634,35 @@ class DiceLoss(nn.Module):
 
         # Return Dice loss (1 - Dice coefficient)
         return 1.0 - dice
+
+
+class FocalDiceLoss(nn.Module):
+    """Combined Focal + Dice loss for extreme class imbalance.
+    
+    Focal loss downweights easy negatives so the model focuses on hard
+    positives near X-point boundaries. Combined with Dice loss
+    which directly optimizes region overlap.
+    """
+    def __init__(self, alpha=0.75, gamma=2.0, dice_weight=0.5, smooth=1.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.dice_weight = dice_weight
+        self.dice = DiceLoss(smooth=smooth)
+
+    def forward(self, inputs, targets):
+        # Focal loss
+        bce = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        p = torch.sigmoid(inputs)
+        pt = p * targets + (1 - p) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal = alpha_t * ((1 - pt) ** self.gamma) * bce
+        focal_loss = focal.mean()
+
+        # Dice loss
+        dice_loss = self.dice(inputs, targets)
+
+        return (1 - self.dice_weight) * focal_loss + self.dice_weight * dice_loss
 
 # TRAIN & VALIDATION UTILS
 def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark=None):
@@ -874,6 +910,25 @@ def parseCommandLineArgs():
                         help='specify the weight decay (L2 regularization) for optimizer')
     parser.add_argument('--dropoutRate', type=float, default=0.2,
                         help='specify the dropout rate for regularization')
+    parser.add_argument('--baseChannels', type=int, default=64,
+                        help='base number of channels in the UNet encoder (default: 64)')
+    parser.add_argument('--posRatio', type=float, default=0.5,
+                        help='target ratio of patches containing X-points (default: 0.5)')
+    parser.add_argument('--lossFunction', type=str, default='dice',
+                        choices=['dice', 'focal_dice'],
+                        help='loss function: dice (default) or focal_dice (combined focal + dice)')
+    parser.add_argument('--focalAlpha', type=float, default=0.75,
+                        help='focal loss alpha (class balance weight, default: 0.75)')
+    parser.add_argument('--focalGamma', type=float, default=2.0,
+                        help='focal loss gamma (focusing parameter, default: 2.0)')
+    parser.add_argument('--focalDiceWeight', type=float, default=0.5,
+                        help='weight of dice component in FocalDiceLoss (default: 0.5)')
+    parser.add_argument('--warmupEpochs', type=int, default=0,
+                        help='number of linear warmup epochs before cosine decay (default: 0)')
+    parser.add_argument('--swa', action='store_true',
+                        help='enable Stochastic Weight Averaging for better generalization')
+    parser.add_argument('--swaStart', type=float, default=0.75,
+                        help='fraction of total epochs after which SWA begins (default: 0.75)')
     parser.add_argument('--batchSize', type=int, default=1,
                         help='specify the batch size')
     parser.add_argument('--epochs', type=int, default=2000,
@@ -1168,7 +1223,7 @@ def main():
             xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
     
     # Enable augmentation for training, disable for validation
-    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.5, retries=30, 
+    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=args.posRatio, retries=30, 
                                     augment=True, seed=args.seed)
     val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.5, retries=30, 
                                     augment=False, seed=args.seed)
@@ -1214,7 +1269,7 @@ def main():
         benchmark.print_hardware_info()
     
     # Use the improved model
-    model = UNet(input_channels=4, base_channels=32, dropout_rate=args.dropoutRate).to(device)
+    model = UNet(input_channels=4, base_channels=args.baseChannels, dropout_rate=args.dropoutRate).to(device)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -1223,13 +1278,19 @@ def main():
     print(f"Trainable parameters: {trainable_params:,}")
     print(f"Dropout rate: {args.dropoutRate}")
 
-    criterion = DiceLoss(smooth=1.0)
+    if args.lossFunction == 'focal_dice':
+        criterion = FocalDiceLoss(alpha=args.focalAlpha, gamma=args.focalGamma,
+                                  dice_weight=args.focalDiceWeight, smooth=1.0)
+        print(f"Loss function: FocalDiceLoss (alpha={args.focalAlpha}, gamma={args.focalGamma}, dice_weight={args.focalDiceWeight})")
+    else:
+        criterion = DiceLoss(smooth=1.0)
+        print("Loss function: DiceLoss")
     
     # Use AdamW optimizer with weight decay for better generalization
     optimizer = optim.AdamW(model.parameters(), lr=args.learningRate, weight_decay=args.weightDecay)
     print(f"Optimizer: AdamW with learning_rate={args.learningRate}, weight_decay={args.weightDecay}")
     
-    # Learning rate scheduler
+    # Learning rate scheduler (with optional warmup)
     if args.scheduler == 'plateau':
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
@@ -1240,8 +1301,32 @@ def main():
         )
         print(f"Scheduler: ReduceLROnPlateau (factor={args.plateau_factor}, patience={args.plateau_patience}, min_lr={args.plateau_min_lr})")
     else:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-        print("Scheduler: CosineAnnealingLR")
+        if args.warmupEpochs > 0:
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=args.epochs - args.warmupEpochs, eta_min=1e-6
+            )
+            warmup_scheduler = optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=args.warmupEpochs
+            )
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[args.warmupEpochs]
+            )
+            print(f"Scheduler: CosineAnnealingLR with {args.warmupEpochs}-epoch linear warmup")
+        else:
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+            print("Scheduler: CosineAnnealingLR")
+    
+    # SWA setup
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = int(args.epochs * args.swaStart)
+    if args.swa:
+        from torch.optim.swa_utils import AveragedModel, SWALR
+        swa_model = AveragedModel(model)
+        swa_scheduler = SWALR(optimizer, swa_lr=args.learningRate * 0.1)
+        print(f"SWA: Enabled (starts at epoch {swa_start_epoch})")
     
     # --- AMP Setup (bfloat16 aware) ---
     use_amp = args.use_amp and torch.cuda.is_available()
@@ -1300,7 +1385,10 @@ def main():
         print(log_msg)
         
         # Learning rate scheduling
-        if args.scheduler == 'plateau':
+        if args.swa and epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        elif args.scheduler == 'plateau':
             scheduler.step(val_loss_epoch)
         else:
             scheduler.step()
@@ -1319,10 +1407,42 @@ def main():
         if (epoch+1) % args.checkPointFrequency == 0:
             save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir, scaler, best_val_loss)
         
-        # Early stopping
-        if patience_counter >= args.patience:
+        # Early stopping (disabled during SWA phase)
+        if patience_counter >= args.patience and not (args.swa and epoch >= swa_start_epoch):
             print(f"Early stopping triggered after {epoch+1} epochs (patience={args.patience})")
             break
+
+    # Finalize SWA: update batch normalization statistics
+    if args.swa and swa_model is not None:
+        print("Updating SWA batch normalization statistics...")
+        # Custom BN update since our DataLoader yields dicts, not raw tensors
+        momenta = {}
+        for module in swa_model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.running_mean = torch.zeros_like(module.running_mean)
+                module.running_var = torch.ones_like(module.running_var)
+                momenta[module] = module.momentum
+                module.momentum = None
+                module.num_batches_tracked *= 0
+        swa_model.train()
+        with torch.no_grad():
+            for batch in train_loader:
+                all_data = batch["all"].to(device)
+                with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
+                    swa_model(all_data)
+        for module, momentum in momenta.items():
+            module.momentum = momentum
+        # Save SWA model as best if it improves val loss
+        swa_model.eval()
+        swa_val_loss = validate_one_epoch(swa_model, val_loader, criterion, device, use_amp, amp_dtype)
+        print(f"SWA model validation loss: {swa_val_loss:.6f} (vs best: {best_val_loss:.6f})")
+        if swa_val_loss < best_val_loss:
+            print("SWA model is better - saving as best model")
+            # Extract the inner module for saving
+            torch.save(swa_model.module.state_dict(), os.path.join(checkpoint_dir, "best_model.pt"))
+            best_val_loss = swa_val_loss
+        else:
+            print("SWA model did not improve - keeping original best model")
 
     plot_training_history(train_loss, val_loss, save_path='plots/training_history.png')
     print("time (s) to train model: " + str(timer()-t2))
