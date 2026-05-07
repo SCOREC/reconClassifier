@@ -11,6 +11,8 @@ Usage:
 """
 
 import argparse
+import multiprocessing as mp
+import os
 import sys
 import time
 from pathlib import Path
@@ -30,8 +32,14 @@ sys.path.insert(0, str(RC_ROOT))
 
 from XPointMLTest import XPointDataset
 
-EXTRACT_DIR = Path("/work/nvme/bfim/ssridhar6/mlReconnection2025")
-CACHE_BASE = Path("/work/nvme/bfim/ssridhar6/mlReconnection2025/cache")
+EXTRACT_DIR = Path(os.environ.get(
+    "RC_EXTRACT_DIR",
+    "/work/nvme/bfim/ssridhar6/mlReconnection2025",
+))
+CACHE_BASE = Path(os.environ.get(
+    "RC_CACHE_BASE",
+    "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache",
+))
 
 DATASETS = {
     "5M": {
@@ -64,11 +72,27 @@ def discover_all_frames(extract_dir):
     return sorted(f for f in frame_nums if f > 0)
 
 
+def _process_frame(task):
+    """Worker function: process a single frame. Returns (frame_num, elapsed)."""
+    param_path, fnum, cache_dir = task
+    t0 = time.time()
+    dataset = XPointDataset(
+        str(param_path),
+        [fnum],
+        xptCacheDir=cache_dir,
+        rotateAndReflect=False,
+    )
+    elapsed = time.time() - t0
+    return fnum, elapsed
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build X-point cache for transfer datasets")
     parser.add_argument("--dataset", required=True, choices=["5M", "10M"])
     parser.add_argument("--start", type=int, default=None, help="First frame index (inclusive)")
     parser.add_argument("--end", type=int, default=None, help="Last frame index (inclusive)")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Number of parallel workers (default: 1)")
     args = parser.parse_args()
 
     ds = DATASETS[args.dataset]
@@ -79,6 +103,7 @@ def main():
     print(f"Dataset: {args.dataset}")
     print(f"Param file: {param_path}")
     print(f"Cache dir: {cache_dir}")
+    print(f"Workers: {args.workers}")
 
     all_frames = discover_all_frames(ds["extract_subdir"])
     print(f"Total frames available: {len(all_frames)} ({all_frames[0]}-{all_frames[-1]})")
@@ -99,28 +124,39 @@ def main():
         print("All frames already cached!")
         return
 
-    # Process frames one at a time, with progress and timing
-    total_time = 0
-    for i, fnum in enumerate(uncached):
-        print(f"\n[{i+1}/{len(uncached)}] Frame {fnum}...", flush=True)
-        t0 = time.time()
+    tasks = [(param_path, fnum, cache_dir) for fnum in uncached]
 
-        # XPointDataset will compute and cache for us
-        dataset = XPointDataset(
-            str(param_path),
-            [fnum],
-            xptCacheDir=cache_dir,
-            rotateAndReflect=False,
-        )
+    if args.workers <= 1:
+        # Sequential mode (original behavior)
+        total_time = 0
+        for i, task in enumerate(tasks):
+            fnum = task[1]
+            print(f"\n[{i+1}/{len(uncached)}] Frame {fnum}...", flush=True)
+            _, elapsed = _process_frame(task)
+            total_time += elapsed
+            avg = total_time / (i + 1)
+            remaining = avg * (len(uncached) - i - 1)
+            print(f"    Done in {elapsed:.1f}s | Avg: {avg:.1f}s/frame | "
+                  f"ETA: {remaining/3600:.1f}h remaining", flush=True)
+    else:
+        # Parallel mode
+        print(f"\nStarting parallel processing with {args.workers} workers...", flush=True)
+        total_time = 0
+        completed = 0
+        wall_start = time.time()
+        with mp.Pool(processes=args.workers) as pool:
+            for fnum, elapsed in pool.imap_unordered(_process_frame, tasks):
+                completed += 1
+                total_time += elapsed
+                wall_elapsed = time.time() - wall_start
+                avg_wall = wall_elapsed / completed
+                remaining = avg_wall * (len(uncached) - completed)
+                print(f"[{completed}/{len(uncached)}] Frame {fnum} done in {elapsed:.1f}s | "
+                      f"Wall avg: {avg_wall:.1f}s/frame | "
+                      f"ETA: {remaining/60:.1f}m remaining", flush=True)
+        total_time = time.time() - wall_start
 
-        elapsed = time.time() - t0
-        total_time += elapsed
-        avg = total_time / (i + 1)
-        remaining = avg * (len(uncached) - i - 1)
-        print(f"    Done in {elapsed:.1f}s | Avg: {avg:.1f}s/frame | "
-              f"ETA: {remaining/3600:.1f}h remaining", flush=True)
-
-    print(f"\nCache building complete! Total time: {total_time/3600:.1f}h")
+    print(f"\nCache building complete! Wall time: {total_time/60:.1f}m ({total_time/3600:.1f}h)")
     print(f"Cached {len(uncached)} frames to {cache_dir}")
 
 

@@ -44,7 +44,7 @@ from eval_metrics import evaluate_model_on_dataset
 SOURCE_DIR = Path("/work/nvme/bfim/cwsmith/mlReconnection2025")
 EXTRACT_DIR = Path("/work/nvme/bfim/ssridhar6/mlReconnection2025")
 CACHE_BASE = EXTRACT_DIR / "cache"
-BEST_MODEL = Path.home() / "mlReconnection/testdir_2026-04-01-19-57-11/checkpoints/best_model.pt"
+BEST_MODEL = Path.home() / "mlReconnection/testdir_2026-04-02-13-23-05/checkpoints/best_model.pt"
 OUTPUT_DIR = Path.home() / "mlReconnection/transfer_eval_results"
 
 DATASETS = {

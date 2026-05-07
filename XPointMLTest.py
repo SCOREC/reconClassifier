@@ -150,23 +150,38 @@ def getPgkylData(paramFile, frameNumber, verbosity):
   params["polyOrderOverride"] = 0 #Override default dg interpolation and interpolate to given number of points
   constrcutBandJ = 1
   #Read vector potential
+  import time as _time
+  _t0 = _time.time()
   var = gkData.gkData(str(paramFile),frameNumber,'psi',params).compactRead()
+  _t1 = _time.time()
+  print(f"  [PROFILE] compactRead: {_t1-_t0:.1f}s")
   psi = var.data
   coords = var.coords
   axesNorm = var.d[ var.speciesFileIndex.index('ion') ]
   if verbosity > 0:
     print(f"psi shape: {psi.shape}, min={psi.min()}, max={psi.max()}")
   #Construct B and J (first and second derivatives)
+  _t2 = _time.time()
   [df_dx,df_dy,df_dz] = auxFuncs.genGradient(psi,var.dx)
   [d2f_dxdx,d2f_dxdy,d2f_dxdz] = auxFuncs.genGradient(df_dx,var.dx)
   [d2f_dydx,d2f_dydy,d2f_dydz] = auxFuncs.genGradient(df_dy,var.dx)
+  _t3 = _time.time()
+  print(f"  [PROFILE] 3x genGradient: {_t3-_t2:.1f}s")
   bx = df_dy
   by = -df_dx
   jz = -(d2f_dxdx + d2f_dydy) / var.mu0
-  del df_dx,df_dy,df_dz,d2f_dxdx,d2f_dxdy,d2f_dxdz,d2f_dydx,d2f_dydy,d2f_dydz
+  #Precompute Hessian from already-computed derivatives (avoid redundant gradient calls)
+  Hess = np.array([d2f_dxdx, d2f_dxdy, d2f_dxdy, d2f_dydy])
+  del df_dz,d2f_dxdz,d2f_dydz,d2f_dxdx,d2f_dxdy,d2f_dydx,d2f_dydy,df_dx,df_dy
   #Indicies of critical points, X points, and O points (max and min)
+  _t4 = _time.time()
   critPoints = auxFuncs.getCritPoints(psi)
-  [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(psi, critPoints)
+  _t5 = _time.time()
+  print(f"  [PROFILE] getCritPoints: {_t5-_t4:.1f}s")
+  [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(psi, critPoints, hessian=Hess)
+  _t6 = _time.time()
+  print(f"  [PROFILE] getXOPoints: {_t6-_t5:.1f}s")
+  print(f"  [PROFILE] TOTAL: {_t6-_t0:.1f}s")
   return [var.filenameBase, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz]
 
 def cachedPgkylDataExists(cacheDir, frameNumber, fieldName):
