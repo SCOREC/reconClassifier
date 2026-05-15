@@ -22,17 +22,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# -- Monkey-patch: fix 5m/10m .gkyl component indexing bug in getData.py --
-# The bug: getData.py passes comp=N to pg.data.GData which pre-selects the
-# component, then tries data[..., N] which fails (array only has 1 element).
-# Fix: drop the comp kwarg so GData returns all components.
-import postgkyl as pg
-_orig_GData_init = pg.data.GData.__init__
-def _fixed_GData_init(self, *args, comp=None, **kwargs):
-    _orig_GData_init(self, *args, **kwargs)
-pg.data.GData.__init__ = _fixed_GData_init
-# -- End monkey-patch --
-
 # Add reconClassifier to path
 RC_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(RC_ROOT))
@@ -165,12 +154,12 @@ def main():
             print(f"  ERROR: {e}")
             continue
 
-        # Load dataset using cache (pre-built by build_transfer_cache.py)
+        # Load dataset using cache (pre-built by run_hessian_and_build_cache.py)
         cache_dir = CACHE_BASE / ds_name
         if not cache_dir.is_dir():
             print(f"  ERROR: Cache directory {cache_dir} not found.")
-            print(f"  Run build_transfer_cache.py --dataset {ds_name} first.")
-            continue
+            print(f"  Run run_hessian_and_build_cache.py --dataset {ds_name} first.")
+            sys.exit(1)
 
         print(f"  Loading {ds_name} dataset ({len(frame_nums)} frames, cache={cache_dir})...", flush=True)
         t0 = time.time()

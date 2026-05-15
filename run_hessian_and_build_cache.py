@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Build X-point cache for 5M/10M datasets.
+Run the deterministic Hessian X-point classifier on the raw .gkyl frames of a
+transfer dataset (5M or 10M) and write the results to a .npy cache directory.
 
-This pre-computes and caches the X-point finder results so that
-test_xpoint_transfer.py can load all frames quickly.
+This is the only script in the repo that runs the Hessian classifier and
+writes the cache. XPointMLTest.py and test_xpoint_transfer.py read the cache
+produced here; they will raise FileNotFoundError if a frame is missing.
 
 Usage:
-  python build_transfer_cache.py --dataset 5M --start 1 --end 75
-  python build_transfer_cache.py --dataset 10M --start 76 --end 150
+  python run_hessian_and_build_cache.py --dataset 5M --start 1 --end 75
+  python run_hessian_and_build_cache.py --dataset 10M --start 76 --end 150
 """
 
 import argparse
@@ -30,7 +32,11 @@ pg.data.GData.__init__ = _fixed_GData_init
 RC_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(RC_ROOT))
 
-from XPointMLTest import XPointDataset
+from XPointMLTest import (
+    getPgkylData,
+    writePgkylDataToCache,
+    cachedPgkylDataExists,
+)
 
 EXTRACT_DIR = Path(os.environ.get(
     "RC_EXTRACT_DIR",
@@ -73,15 +79,17 @@ def discover_all_frames(extract_dir):
 
 
 def _process_frame(task):
-    """Worker function: process a single frame. Returns (frame_num, elapsed)."""
+    """Worker function: run the Hessian classifier on one frame and write its cache. Returns (frame_num, elapsed)."""
     param_path, fnum, cache_dir = task
     t0 = time.time()
-    dataset = XPointDataset(
-        str(param_path),
-        [fnum],
-        xptCacheDir=cache_dir,
-        rotateAndReflect=False,
-    )
+    [fileName, axesNorm, critPoints, xpts, optsMax, optsMin,
+     coords, psi, bx, by, jz] = getPgkylData(str(param_path), fnum, verbosity=0)
+    fields = {"psi": psi, "critPts": critPoints, "xpts": xpts,
+              "optsMax": optsMax, "optsMin": optsMin,
+              "axesNorm": axesNorm, "coords": coords,
+              "fileName": fileName,
+              "Bx": bx, "By": by, "Jz": jz}
+    writePgkylDataToCache(cache_dir, fnum, fields)
     elapsed = time.time() - t0
     return fnum, elapsed
 
@@ -115,7 +123,6 @@ def main():
     print(f"Processing frames {start}-{end}: {len(frames)} frames")
 
     # Check which frames are already cached
-    from XPointMLTest import cachedPgkylDataExists
     uncached = [f for f in frames if not cachedPgkylDataExists(cache_dir, f, "psi")]
     cached = len(frames) - len(uncached)
     print(f"Already cached: {cached}, need to compute: {len(uncached)}")

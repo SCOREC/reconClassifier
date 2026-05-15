@@ -290,17 +290,14 @@ class XPointDataset(Dataset):
                   "Bx":None, "By":None,
                   "Jz":None}
 
-        # Indicies of critical points, X points, and O points (max and min)
-        if self.xptCacheDir != None and cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
-          fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
-        else:
-          [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=self.verbosity)
-          fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
-                    "optsMax":optsMax, "optsMin":optsMin,
-                    "axesNorm": axesNorm, "coords": coords,
-                    "fileName": fileName,
-                    "Bx":bx, "By":by, "Jz":jz}
-          writePgkylDataToCache(self.xptCacheDir, fnum, fields)
+        # Indices of critical points, X points, and O points (max and min) -- read from cache only.
+        # The Hessian X-point classifier is run exclusively by run_hessian_and_build_cache.py.
+        if self.xptCacheDir is None or not cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
+          raise FileNotFoundError(
+              f"No cached X-point data for frame {fnum} in {self.xptCacheDir}. "
+              f"Run run_hessian_and_build_cache.py to populate the cache before training/evaluating."
+          )
+        fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
         self.params["axesNorm"] = fields["axesNorm"]
 
         if self.verbosity > 0:

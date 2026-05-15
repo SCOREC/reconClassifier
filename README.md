@@ -92,6 +92,26 @@ The classifier supports several command line options for training configuration:
 - `--epochs`: Number of training epochs (default: 2000)
 - `--minTrainingLoss`: Minimum reduction in training loss in orders of magnitude (default: 3, set to 0 to disable check)
 
+### Architecture
+- `--baseChannels`: Base number of channels in the UNet encoder (default: 64)
+
+### Loss Function
+- `--lossFunction`: Loss function, `dice` (default) or `focal_dice` (combined focal + dice loss for class imbalance)
+- `--focalAlpha`: Focal loss alpha, class balance weight (default: 0.75)
+- `--focalGamma`: Focal loss gamma, focusing parameter (default: 2.0)
+- `--focalDiceWeight`: Weight of the dice component in FocalDiceLoss (default: 0.5)
+
+### Learning Rate Schedule
+- `--warmupEpochs`: Number of linear warmup epochs before the main scheduler kicks in (default: 0)
+- `--scheduler`: Learning rate scheduler, `cosine` (default) or `plateau`
+- `--plateau-factor`: ReduceLROnPlateau factor (default: 0.5)
+- `--plateau-patience`: ReduceLROnPlateau patience in epochs (default: 5)
+- `--plateau-min-lr`: ReduceLROnPlateau minimum learning rate (default: 1e-6)
+
+### Stochastic Weight Averaging
+- `--swa`: Enable Stochastic Weight Averaging for better generalization
+- `--swaStart`: Fraction of total epochs after which SWA begins (default: 0.75)
+
 ### Data Configuration
 - `--trainFrameFirst`: First frame number for training data (default: 1)
 - `--trainFrameLast`: Last frame number (exclusive) for training data (default: 140)
@@ -99,11 +119,14 @@ The classifier supports several command line options for training configuration:
 - `--validationFrameLast`: Last frame number (exclusive) for validation data (default: 150)
 - `--paramFile`: Path to the parameter txt file containing gkyl input data
 - `--xptCacheDir`: Path to directory for caching X-point finder outputs
+- `--posRatio`: Target ratio of training patches containing at least one X-point (default: 0.5)
+- `--fixed-val-crops`: Use deterministic validation crops each epoch for stable val loss (default: False)
 
 ### Training Optimization
 - `--use-amp`: Enable automatic mixed precision training for faster training on modern GPUs
 - `--amp-dtype`: Data type for mixed precision (`float16` or `bfloat16`, default: `bfloat16`)
 - `--patience`: Patience for early stopping (default: 15 epochs)
+- `--early-stop-min-delta`: Minimum improvement in validation loss to reset early stopping (default: 0.0)
 - `--seed`: Random seed for reproducibility (default: None for non-deterministic)
 - `--require-gpu`: Require GPU to be available, exit if not found
 
@@ -140,6 +163,46 @@ python -u ${rcRoot}/reconClassifier/XPointMLTest.py \
 --plot \
 --trainFrameLast 100 \
 --validationFrameLast 120
+```
+
+## Hyperparameter Tuning with Optuna
+
+The `optuna_tuner.py` script automates hyperparameter search over the knobs above (base channels, dropout, weight decay, learning rate, positive ratio, focal/dice weighting, scheduler choice, SWA start). It uses a Tree-structured Parzen Estimator sampler and a Median Pruner that aborts unpromising runs early based on the validation F1 curve.
+
+```
+python -u ${rcRoot}/reconClassifier/optuna_tuner.py \
+--paramFile=/path/to/params.txt \
+--xptCacheDir=/path/to/cache \
+--n-trials 50 \
+--study-name xpoint-tuning \
+--db sqlite:///optuna_xpoint.db
+```
+
+The SQLite database is created automatically on first run and reloaded on subsequent runs with the same `--study-name`, so a study can be resumed or extended without re-running completed trials.
+
+## Cross-regime Transfer Evaluation
+
+The PKPM-trained model can be evaluated zero-shot on additional Gkeyll datasets (currently 5-moment "5M" and 10-moment "10M" fluid simulations). Evaluation runs in two steps: first build the X-point cache for the transfer dataset, then run the evaluator.
+
+### Building the X-point cache for 5M/10M
+
+`run_hessian_and_build_cache.py` is the only script that runs the deterministic Hessian X-point classifier; it writes the per-frame results as `.npy` files so the training and evaluation scripts only ever read from cache. Trying to train or evaluate on an uncached frame raises a clear error pointing back to this script.
+
+```
+python -u ${rcRoot}/reconClassifier/run_hessian_and_build_cache.py \
+--dataset 5M \
+--start 1 --end 150 \
+--workers 30
+```
+
+The `RC_EXTRACT_DIR` and `RC_CACHE_BASE` environment variables override the default raw-data and cache directories. Pointing `RC_EXTRACT_DIR` at a node-local ramdisk (e.g. `/dev/shm/$USER`) significantly accelerates cache construction on machines where the raw data lives on a slow shared filesystem.
+
+### Running transfer evaluation
+
+`test_xpoint_transfer.py` loads the best PKPM-trained checkpoint and evaluates it on each transfer dataset, writing per-dataset and combined metrics to `transfer_eval_results/`. The path to the checkpoint is set by the `BEST_MODEL` constant near the top of the script; update it to point at your trained checkpoint before running. Both transfer caches must exist before this script is run.
+
+```
+python -u ${rcRoot}/reconClassifier/test_xpoint_transfer.py
 ```
 
 ## Resuming Development Work
