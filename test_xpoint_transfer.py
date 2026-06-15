@@ -33,23 +33,55 @@ from eval_metrics import evaluate_model_on_dataset
 SOURCE_DIR = Path("/work/nvme/bfim/cwsmith/mlReconnection2025")
 EXTRACT_DIR = Path("/work/nvme/bfim/ssridhar6/mlReconnection2025")
 CACHE_BASE = EXTRACT_DIR / "cache"
-BEST_MODEL = Path.home() / "mlReconnection/testdir_2026-04-02-13-23-05/checkpoints/best_model.pt"
+BEST_MODEL = Path(os.environ.get(
+    "BEST_MODEL_PATH",
+    str(Path.home() / "mlReconnection/testdir_2026-04-02-13-23-05/checkpoints/best_model.pt"),
+))
 OUTPUT_DIR = Path.home() / "mlReconnection/transfer_eval_results"
 
-DATASETS = {
+# Which dataset to treat as the in-domain validation reference. The other two
+# become zero-shot transfer targets. Default = PKPM (backward compatible).
+IN_DOMAIN = os.environ.get("IN_DOMAIN", "PKPM").upper()
+
+# Optional tag suffixed onto output filenames so different runs don't overwrite
+# each other (e.g. OUTPUT_TAG=10mTrained -> eval_pkpm_10mTrained.json).
+OUTPUT_TAG = os.environ.get("OUTPUT_TAG", "")
+
+# Full config for every dataset we might use as in-domain or as a transfer target.
+ALL_DATASETS = {
+    "PKPM": {
+        "param_path": "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt",
+        "cache_dir": "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/cache04082025",
+        "val_frames": list(range(141, 150)),
+        # transfer-target-specific extraction info (only used when PKPM is zero-shot,
+        # which doesn't currently happen but is supported for completeness):
+        "tarball": None,
+        "extract_subdir": None,
+        "param_file": None,
+    },
     "5M": {
+        "param_path": None,  # discovered from extract_subdir
+        "cache_dir": str(EXTRACT_DIR / "cache" / "5M"),
+        "val_frames": list(range(141, 150)),
         "tarball": SOURCE_DIR / "5M.tgz",
         "extract_subdir": EXTRACT_DIR / "5M",
         "param_file": "rt_5M_2d_turb_local-params.txt",
-        "tar_prefix": "./",  # files are at root of tarball
     },
     "10M": {
+        "param_path": None,  # discovered from extract_subdir
+        "cache_dir": str(EXTRACT_DIR / "cache" / "10M"),
+        "val_frames": list(range(141, 150)),
         "tarball": SOURCE_DIR / "10M.tgz",
         "extract_subdir": EXTRACT_DIR / "10M",
         "param_file": "rt_10M_2d_turb_local-params.txt",
-        "tar_prefix": "10M/",  # files are under 10M/ subdir
     },
 }
+
+if IN_DOMAIN not in ALL_DATASETS:
+    raise ValueError(f"IN_DOMAIN={IN_DOMAIN!r} not in {list(ALL_DATASETS)}")
+
+# DATASETS iterated by the main loop = all the *zero-shot* targets (not in-domain).
+DATASETS = {k: v for k, v in ALL_DATASETS.items() if k != IN_DOMAIN}
 
 # Model config must match training
 BASE_CHANNELS = 64
@@ -134,31 +166,62 @@ def main():
     use_amp = torch.cuda.is_available()
     amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
+    # Optionally exclude an N-pixel border from metrics. Set via env var so
+    # the same script can run unchanged at margin=0 (default) or at any
+    # diagnostic margin (e.g. EDGE_MARGIN=10).
+    edge_margin = int(os.environ.get("EDGE_MARGIN", 0))
+    suffix_parts = []
+    if OUTPUT_TAG:
+        suffix_parts.append(OUTPUT_TAG)
+    if edge_margin > 0:
+        suffix_parts.append(f"em{edge_margin}")
+    suffix = ("_" + "_".join(suffix_parts)) if suffix_parts else ""
+    if edge_margin > 0:
+        print(f"\n[edge_margin] Excluding {edge_margin}-pixel border from metrics", flush=True)
+    print(f"\n[config] IN_DOMAIN={IN_DOMAIN}, BEST_MODEL={BEST_MODEL}, OUTPUT_TAG={OUTPUT_TAG or '(none)'}", flush=True)
+
     all_results = {}
 
     # ── Process each dataset ───────────────────────────────────────────
     for ds_name, ds_config in DATASETS.items():
         print(f"\n{'='*70}")
-        print(f"EVALUATING ON {ds_name} DATA")
+        print(f"EVALUATING ON {ds_name} DATA (zero-shot)")
         print(f"{'='*70}")
 
-        # Extract
-        extract_tarball(ds_config["tarball"], ds_config["extract_subdir"], ds_name)
+        if ds_config["tarball"] is not None:
+            # 5M / 10M path: extract tarball into EXTRACT_DIR then discover frames
+            extract_tarball(ds_config["tarball"], ds_config["extract_subdir"], ds_name)
+            try:
+                param_path, frame_nums = discover_frames(
+                    ds_config["extract_subdir"], ds_config["param_file"]
+                )
+            except FileNotFoundError as e:
+                print(f"  ERROR: {e}")
+                continue
+            cache_dir = Path(ds_config["cache_dir"])
+        else:
+            # PKPM path: data is already on disk at a fixed cwsmith location
+            param_path = Path(ds_config["param_path"])
+            cache_dir = Path(ds_config["cache_dir"])
+            # full frame range, excluding frame 0 (initial conditions)
+            frame_nums = list(range(1, 151))
 
-        # Discover frames
-        try:
-            param_path, frame_nums = discover_frames(
-                ds_config["extract_subdir"], ds_config["param_file"]
-            )
-        except FileNotFoundError as e:
-            print(f"  ERROR: {e}")
-            continue
-
-        # Load dataset using cache (pre-built by run_hessian_and_build_cache.py)
-        cache_dir = CACHE_BASE / ds_name
         if not cache_dir.is_dir():
             print(f"  ERROR: Cache directory {cache_dir} not found.")
             print(f"  Run run_hessian_and_build_cache.py --dataset {ds_name} first.")
+            sys.exit(1)
+
+        # Filter to only frames actually present in the cache (some datasets
+        # have small gaps, e.g. PKPM frame 140 is missing).
+        from XPointMLTest import cachedPgkylDataExists
+        available = [f for f in frame_nums if cachedPgkylDataExists(cache_dir, f, "psi")]
+        skipped = [f for f in frame_nums if f not in available]
+        if skipped:
+            print(f"  [filter] {len(skipped)} frame(s) not in cache, skipping: "
+                  f"{skipped[:5]}{'...' if len(skipped) > 5 else ''}")
+        frame_nums = available
+        if not frame_nums:
+            print(f"  ERROR: No cached frames available for {ds_name}.")
             sys.exit(1)
 
         print(f"  Loading {ds_name} dataset ({len(frame_nums)} frames, cache={cache_dir})...", flush=True)
@@ -187,13 +250,15 @@ def main():
         evaluator = evaluate_model_on_dataset(
             model, dataset, device,
             use_amp=use_amp, amp_dtype=amp_dtype, threshold=0.5,
+            edge_margin=edge_margin,
         )
         elapsed = time.time() - t0
 
         evaluator.print_summary()
 
-        # Save per-dataset results
-        output_file = OUTPUT_DIR / f"eval_{ds_name.lower()}.json"
+        # Save per-dataset results (suffix the file when running with a margin so
+        # the baseline edge_margin=0 results aren't overwritten by diagnostic runs)
+        output_file = OUTPUT_DIR / f"eval_{ds_name.lower()}{suffix}.json"
         evaluator.save_json(str(output_file))
 
         metrics = evaluator.get_global_metrics()
@@ -204,40 +269,49 @@ def main():
         print(f"  Inference time: {elapsed:.1f}s ({elapsed/len(frame_nums):.2f}s/frame)")
 
         # Save partial results incrementally in case of timeout
-        with open(OUTPUT_DIR / "transfer_summary.json", "w") as f:
+        summary_path = OUTPUT_DIR / (f"transfer_summary{suffix}.json")
+        with open(summary_path, "w") as f:
             json.dump(all_results, f, indent=2)
 
-    # ── Also re-evaluate on original PKPM validation set for comparison ──
+    # ── Also re-evaluate on the in-domain validation set for comparison ──
+    in_cfg = ALL_DATASETS[IN_DOMAIN]
+    in_param = in_cfg["param_path"]
+    in_cache = in_cfg["cache_dir"]
+    if in_param is None:
+        # 5M / 10M: resolve param file via the same discover_frames helper
+        if in_cfg["tarball"] is not None:
+            extract_tarball(in_cfg["tarball"], in_cfg["extract_subdir"], IN_DOMAIN)
+        in_param, _ = discover_frames(in_cfg["extract_subdir"], in_cfg["param_file"])
+    in_val_frames = in_cfg["val_frames"]
+
     print(f"\n{'='*70}")
-    print(f"RE-EVALUATING ON PKPM VALIDATION (baseline comparison)")
+    print(f"RE-EVALUATING ON {IN_DOMAIN} VALIDATION (in-domain reference)")
     print(f"{'='*70}")
 
-    pkpm_param = "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt"
-    pkpm_cache = "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/cache04082025"
-    pkpm_val_frames = list(range(141, 150))
-
-    print(f"  Loading PKPM validation ({len(pkpm_val_frames)} frames)...")
+    print(f"  Loading {IN_DOMAIN} validation ({len(in_val_frames)} frames)...")
     t0 = time.time()
-    pkpm_dataset = XPointDataset(
-        pkpm_param, pkpm_val_frames,
-        xptCacheDir=Path(pkpm_cache),
+    in_dataset = XPointDataset(
+        str(in_param), in_val_frames,
+        xptCacheDir=Path(in_cache),
         rotateAndReflect=False,
     )
     print(f"  Loaded in {time.time()-t0:.1f}s")
 
     t0 = time.time()
-    pkpm_evaluator = evaluate_model_on_dataset(
-        model, pkpm_dataset, device,
+    in_evaluator = evaluate_model_on_dataset(
+        model, in_dataset, device,
         use_amp=use_amp, amp_dtype=amp_dtype, threshold=0.5,
+        edge_margin=edge_margin,
     )
     elapsed = time.time() - t0
-    pkpm_evaluator.print_summary()
-    pkpm_evaluator.save_json(str(OUTPUT_DIR / "eval_pkpm_val.json"))
+    in_evaluator.print_summary()
+    in_key = f"{IN_DOMAIN}_val"
+    in_evaluator.save_json(str(OUTPUT_DIR / f"eval_{in_key.lower()}{suffix}.json"))
 
-    pkpm_metrics = pkpm_evaluator.get_global_metrics()
-    pkpm_metrics["inference_time_s"] = elapsed
-    pkpm_metrics["num_frames"] = len(pkpm_val_frames)
-    all_results["PKPM_val"] = pkpm_metrics
+    in_metrics = in_evaluator.get_global_metrics()
+    in_metrics["inference_time_s"] = elapsed
+    in_metrics["num_frames"] = len(in_val_frames)
+    all_results[in_key] = in_metrics
 
     # ── Summary comparison ─────────────────────────────────────────────
     print(f"\n{'='*70}")
@@ -252,7 +326,7 @@ def main():
     print(f"{'='*70}")
 
     # Save combined summary
-    summary_path = OUTPUT_DIR / "transfer_summary.json"
+    summary_path = OUTPUT_DIR / f"transfer_summary{suffix}.json"
     with open(summary_path, "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\nCombined summary saved to: {summary_path}")

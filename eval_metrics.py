@@ -30,14 +30,18 @@ class ModelEvaluator:
     - IoU: TP / (TP + FP + FN)
     """
     
-    def __init__(self, threshold=0.5):
+    def __init__(self, threshold=0.5, edge_margin=0):
         """
         Initialize evaluator.
-        
+
         Parameters:
         threshold: float - Probability threshold for binary classification (default: 0.5)
+        edge_margin: int - Number of pixels at each frame edge to exclude from
+                           metrics (default: 0). Used to measure how much error
+                           is concentrated near the frame boundary.
         """
         self.threshold = threshold
+        self.edge_margin = int(edge_margin)
         self.reset()
     
     def reset(self):
@@ -62,7 +66,16 @@ class ModelEvaluator:
         # Binarize predictions
         pred_binary = (pred_probs > self.threshold).astype(np.float32)
         gt_binary = (ground_truth > 0.5).astype(np.float32)
-        
+
+        # Optionally exclude an N-pixel border from the confusion matrix.
+        # Useful for diagnosing how much of the residual error is concentrated
+        # near the frame edges, where conv-padding artifacts and partially
+        # visible X-points can dominate.
+        m = self.edge_margin
+        if m > 0 and pred_binary.shape[0] > 2 * m and pred_binary.shape[1] > 2 * m:
+            pred_binary = pred_binary[m:-m, m:-m]
+            gt_binary = gt_binary[m:-m, m:-m]
+
         # Compute confusion matrix elements
         tp = np.sum((pred_binary == 1) & (gt_binary == 1))
         fp = np.sum((pred_binary == 1) & (gt_binary == 0))
@@ -215,6 +228,7 @@ class ModelEvaluator:
             'frame_statistics': self.get_frame_statistics(),
             'per_frame_metrics': self.frame_metrics,
             'threshold': self.threshold,
+            'edge_margin': self.edge_margin,
             'num_frames': len(self.frame_metrics)
         }
         
@@ -227,11 +241,12 @@ class ModelEvaluator:
         print(f"Evaluation metrics saved to: {output_path}")
 
 
-def evaluate_model_on_dataset(model, dataset, device, use_amp=False, 
-                              amp_dtype=torch.float16, threshold=0.5):
+def evaluate_model_on_dataset(model, dataset, device, use_amp=False,
+                              amp_dtype=torch.float16, threshold=0.5,
+                              edge_margin=0):
     """
     Evaluate model on entire dataset and return metrics.
-    
+
     Parameters:
     model: nn.Module - The trained model
     dataset: Dataset - Dataset to evaluate on (XPointDataset, not patch dataset)
@@ -239,12 +254,15 @@ def evaluate_model_on_dataset(model, dataset, device, use_amp=False,
     use_amp: bool - Whether to use automatic mixed precision
     amp_dtype: torch.dtype - Data type for mixed precision
     threshold: float - Threshold for binary classification
-    
+    edge_margin: int - Number of pixels at each frame edge to exclude from
+                       metrics (default: 0). Used to measure how much error
+                       is boundary-driven.
+
     Returns:
     ModelEvaluator - Evaluator object with computed metrics
     """
     model.eval()
-    evaluator = ModelEvaluator(threshold=threshold)
+    evaluator = ModelEvaluator(threshold=threshold, edge_margin=edge_margin)
     
     with torch.no_grad():
         for item in dataset:
