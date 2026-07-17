@@ -150,23 +150,38 @@ def getPgkylData(paramFile, frameNumber, verbosity):
   params["polyOrderOverride"] = 0 #Override default dg interpolation and interpolate to given number of points
   constrcutBandJ = 1
   #Read vector potential
+  import time as _time
+  _t0 = _time.time()
   var = gkData.gkData(str(paramFile),frameNumber,'psi',params).compactRead()
+  _t1 = _time.time()
+  print(f"  [PROFILE] compactRead: {_t1-_t0:.1f}s")
   psi = var.data
   coords = var.coords
   axesNorm = var.d[ var.speciesFileIndex.index('ion') ]
   if verbosity > 0:
     print(f"psi shape: {psi.shape}, min={psi.min()}, max={psi.max()}")
   #Construct B and J (first and second derivatives)
+  _t2 = _time.time()
   [df_dx,df_dy,df_dz] = auxFuncs.genGradient(psi,var.dx)
   [d2f_dxdx,d2f_dxdy,d2f_dxdz] = auxFuncs.genGradient(df_dx,var.dx)
   [d2f_dydx,d2f_dydy,d2f_dydz] = auxFuncs.genGradient(df_dy,var.dx)
+  _t3 = _time.time()
+  print(f"  [PROFILE] 3x genGradient: {_t3-_t2:.1f}s")
   bx = df_dy
   by = -df_dx
   jz = -(d2f_dxdx + d2f_dydy) / var.mu0
-  del df_dx,df_dy,df_dz,d2f_dxdx,d2f_dxdy,d2f_dxdz,d2f_dydx,d2f_dydy,d2f_dydz
+  #Precompute Hessian from already-computed derivatives (avoid redundant gradient calls)
+  Hess = np.array([d2f_dxdx, d2f_dxdy, d2f_dxdy, d2f_dydy])
+  del df_dz,d2f_dxdz,d2f_dydz,d2f_dxdx,d2f_dxdy,d2f_dydx,d2f_dydy,df_dx,df_dy
   #Indicies of critical points, X points, and O points (max and min)
+  _t4 = _time.time()
   critPoints = auxFuncs.getCritPoints(psi)
-  [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(psi, critPoints)
+  _t5 = _time.time()
+  print(f"  [PROFILE] getCritPoints: {_t5-_t4:.1f}s")
+  [xpts, optsMax, optsMin] = auxFuncs.getXOPoints(psi, critPoints, hessian=Hess)
+  _t6 = _time.time()
+  print(f"  [PROFILE] getXOPoints: {_t6-_t5:.1f}s")
+  print(f"  [PROFILE] TOTAL: {_t6-_t0:.1f}s")
   return [var.filenameBase, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz]
 
 def cachedPgkylDataExists(cacheDir, frameNumber, fieldName):
@@ -275,17 +290,14 @@ class XPointDataset(Dataset):
                   "Bx":None, "By":None,
                   "Jz":None}
 
-        # Indicies of critical points, X points, and O points (max and min)
-        if self.xptCacheDir != None and cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
-          fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
-        else:
-          [fileName, axesNorm, critPoints, xpts, optsMax, optsMin, coords, psi, bx, by, jz] = getPgkylData(self.paramFile, fnum, verbosity=self.verbosity)
-          fields = {"psi":psi, "critPts":critPoints, "xpts":xpts,
-                    "optsMax":optsMax, "optsMin":optsMin,
-                    "axesNorm": axesNorm, "coords": coords,
-                    "fileName": fileName,
-                    "Bx":bx, "By":by, "Jz":jz}
-          writePgkylDataToCache(self.xptCacheDir, fnum, fields)
+        # Indices of critical points, X points, and O points (max and min) -- read from cache only.
+        # The Hessian X-point classifier is run exclusively by run_hessian_and_build_cache.py.
+        if self.xptCacheDir is None or not cachedPgkylDataExists(self.xptCacheDir, fnum, "psi"):
+          raise FileNotFoundError(
+              f"No cached X-point data for frame {fnum} in {self.xptCacheDir}. "
+              f"Run run_hessian_and_build_cache.py to populate the cache before training/evaluating."
+          )
+        fields = loadPgkylDataFromCache(self.xptCacheDir, fnum, fields)
         self.params["axesNorm"] = fields["axesNorm"]
 
         if self.verbosity > 0:
@@ -329,7 +341,8 @@ class XPointDataset(Dataset):
 
 class XPointPatchDataset(Dataset):
     """On‑the‑fly square crops with data augmentation, balancing positive / background patches."""
-    def __init__(self, base_ds, patch=64, pos_ratio=0.5, retries=30, augment=False, seed=None):
+    def __init__(self, base_ds, patch=64, pos_ratio=0.5, retries=30, augment=False, seed=None,
+                 noise_std_max=0.02, cutout_prob=0.20):
         """
         Parameters:
         -----------
@@ -345,12 +358,18 @@ class XPointPatchDataset(Dataset):
             If True, apply on-the-fly data augmentation (use for training only)
         seed : int or None
             Random seed for reproducibility (None for non-deterministic)
+        noise_std_max : float
+            Maximum std for Gaussian noise augmentation (default: 0.02)
+        cutout_prob : float
+            Probability of applying cutout augmentation (default: 0.20)
         """
         self.base_ds   = base_ds
         self.patch     = patch
         self.pos_ratio = pos_ratio
         self.retries   = retries
         self.augment   = augment
+        self.noise_std_max = noise_std_max
+        self.cutout_prob = cutout_prob
         
         # Initialize RNG with seed if provided
         if seed is not None:
@@ -361,6 +380,13 @@ class XPointPatchDataset(Dataset):
     def __len__(self):
         # give each full frame K random crops per epoch (K=32 for more samples)
         return len(self.base_ds) * 32
+
+    def reset_rng(self, seed=None):
+        """Reset RNG for deterministic cropping (useful for fixed validation)."""
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        else:
+            self.rng = np.random.default_rng()
 
     def _crop(self, arr, top, left):
         return arr[..., top:top+self.patch, left:left+self.patch]
@@ -400,22 +426,23 @@ class XPointPatchDataset(Dataset):
         # 4. Add Gaussian noise (30% chance)
         # Small noise helps prevent overfitting to exact pixel values
         if self.rng.random() < 0.3:
-            noise_std = self.rng.uniform(0.005, 0.02)
+            noise_std = self.rng.uniform(0.005, self.noise_std_max)
             noise = torch.randn_like(all_data) * noise_std
             all_data = all_data + noise
         
-        # 5. Random brightness/contrast adjustment per channel (30% chance)
-        # Helps model become invariant to intensity variations
+        # 5. Random brightness/contrast adjustment (30% chance)
+        # CHANGED: Applied globally across channels to preserve physical relationships
+        # (e.g., keeping the derivative relationship between psi and B fields)
         if self.rng.random() < 0.3:
-            for c in range(all_data.shape[0]):
-                brightness = self.rng.uniform(-0.1, 0.1)
-                contrast = self.rng.uniform(0.9, 1.1)
-                mean = all_data[c].mean()
-                all_data[c] = contrast * (all_data[c] - mean) + mean + brightness
+            brightness = self.rng.uniform(-0.1, 0.1)
+            contrast = self.rng.uniform(0.9, 1.1)
+            # Apply same transformation to all channels
+            mean = all_data.mean(dim=(-2, -1), keepdim=True)
+            all_data = contrast * (all_data - mean) + mean + brightness
         
-        # 6. Cutout/Random erasing (20% chance)
+        # 6. Cutout/Random erasing
         # Prevents model from relying too heavily on specific spatial features
-        if self.rng.random() < 0.2:
+        if self.rng.random() < self.cutout_prob:
             h, w = all_data.shape[-2:]
             cutout_size = int(min(h, w) * self.rng.uniform(0.1, 0.25))
             if cutout_size > 0:
@@ -451,7 +478,9 @@ class XPointPatchDataset(Dataset):
             want_pos  = (attempt / self.retries) < self.pos_ratio
 
             if has_pos == want_pos or attempt == self.retries - 1:
-                all_crop = self._crop(frame["all"], y0, x0)
+                # Clone to avoid in-place augmentation modifying cached base frames
+                all_crop = self._crop(frame["all"], y0, x0).clone()
+                crop_mask = crop_mask.clone()
                 
                 # Apply augmentation if enabled
                 all_crop, crop_mask = self._apply_augmentation(all_crop, crop_mask)
@@ -617,6 +646,35 @@ class DiceLoss(nn.Module):
 
         # Return Dice loss (1 - Dice coefficient)
         return 1.0 - dice
+
+
+class FocalDiceLoss(nn.Module):
+    """Combined Focal + Dice loss for extreme class imbalance.
+    
+    Focal loss downweights easy negatives so the model focuses on hard
+    positives near X-point boundaries. Combined with Dice loss
+    which directly optimizes region overlap.
+    """
+    def __init__(self, alpha=0.75, gamma=2.0, dice_weight=0.5, smooth=1.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.dice_weight = dice_weight
+        self.dice = DiceLoss(smooth=smooth)
+
+    def forward(self, inputs, targets):
+        # Focal loss
+        bce = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        p = torch.sigmoid(inputs)
+        pt = p * targets + (1 - p) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal = alpha_t * ((1 - pt) ** self.gamma) * bce
+        focal_loss = focal.mean()
+
+        # Dice loss
+        dice_loss = self.dice(inputs, targets)
+
+        return (1 - self.dice_weight) * focal_loss + self.dice_weight * dice_loss
 
 # TRAIN & VALIDATION UTILS
 def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark=None):
@@ -864,6 +922,25 @@ def parseCommandLineArgs():
                         help='specify the weight decay (L2 regularization) for optimizer')
     parser.add_argument('--dropoutRate', type=float, default=0.2,
                         help='specify the dropout rate for regularization')
+    parser.add_argument('--baseChannels', type=int, default=64,
+                        help='base number of channels in the UNet encoder (default: 64)')
+    parser.add_argument('--posRatio', type=float, default=0.5,
+                        help='target ratio of patches containing X-points (default: 0.5)')
+    parser.add_argument('--lossFunction', type=str, default='dice',
+                        choices=['dice', 'focal_dice'],
+                        help='loss function: dice (default) or focal_dice (combined focal + dice)')
+    parser.add_argument('--focalAlpha', type=float, default=0.75,
+                        help='focal loss alpha (class balance weight, default: 0.75)')
+    parser.add_argument('--focalGamma', type=float, default=2.0,
+                        help='focal loss gamma (focusing parameter, default: 2.0)')
+    parser.add_argument('--focalDiceWeight', type=float, default=0.5,
+                        help='weight of dice component in FocalDiceLoss (default: 0.5)')
+    parser.add_argument('--warmupEpochs', type=int, default=0,
+                        help='number of linear warmup epochs before cosine decay (default: 0)')
+    parser.add_argument('--swa', action='store_true',
+                        help='enable Stochastic Weight Averaging for better generalization')
+    parser.add_argument('--swaStart', type=float, default=0.75,
+                        help='fraction of total epochs after which SWA begins (default: 0.75)')
     parser.add_argument('--batchSize', type=int, default=1,
                         help='specify the batch size')
     parser.add_argument('--epochs', type=int, default=2000,
@@ -903,6 +980,17 @@ def parseCommandLineArgs():
                         choices=['float16', 'bfloat16'], help='data type for mixed precision (bfloat16 recommended)')
     parser.add_argument('--patience', type=int, default=15,
                         help='patience for early stopping (default: 15)')
+    parser.add_argument('--early-stop-min-delta', type=float, default=0.0,
+                        help='minimum improvement in validation loss to reset early stopping (default: 0.0)')
+    parser.add_argument('--scheduler', type=str, default='cosine',
+                        choices=['cosine', 'plateau'],
+                        help='learning rate scheduler type (cosine or plateau)')
+    parser.add_argument('--plateau-factor', type=float, default=0.5,
+                        help='ReduceLROnPlateau factor (default: 0.5)')
+    parser.add_argument('--plateau-patience', type=int, default=5,
+                        help='ReduceLROnPlateau patience in epochs (default: 5)')
+    parser.add_argument('--plateau-min-lr', type=float, default=1e-6,
+                        help='ReduceLROnPlateau minimum learning rate (default: 1e-6)')
     parser.add_argument('--benchmark', action='store_true',
                         help='enable performance benchmarking (tracks timing, throughput, GPU memory)')
     parser.add_argument('--benchmark-output', type=Path, default='./benchmark_results.json',
@@ -911,6 +999,8 @@ def parseCommandLineArgs():
                         help='path to save evaluation metrics JSON file (default: ./evaluation_metrics.json)')
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for reproducibility (default: None for non-deterministic)')
+    parser.add_argument('--fixed-val-crops', action=argparse.BooleanOptionalAction, default=False,
+                        help='use deterministic validation crops each epoch (default: False)')
     parser.add_argument('--require-gpu', action='store_true',
                         help='require GPU to be available, exit if not found')
     
@@ -964,6 +1054,22 @@ def checkCommandLineArgs(args):
 
     if args.minTrainingLoss < 0:
       print(f"minTrainingLoss must be >= 0... exiting")
+      sys.exit()
+
+    if args.early_stop_min_delta < 0:
+      print("early-stop-min-delta must be >= 0... exiting")
+      sys.exit()
+
+    if args.plateau_factor <= 0 or args.plateau_factor >= 1:
+      print("plateau-factor must be in (0, 1)... exiting")
+      sys.exit()
+
+    if args.plateau_patience < 0:
+      print("plateau-patience must be >= 0... exiting")
+      sys.exit()
+
+    if args.plateau_min_lr < 0:
+      print("plateau-min-lr must be >= 0... exiting")
       sys.exit()
 
     if args.checkPointFrequency < 0:
@@ -1129,7 +1235,7 @@ def main():
             xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
     
     # Enable augmentation for training, disable for validation
-    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=0.5, retries=30, 
+    train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=args.posRatio, retries=30, 
                                     augment=True, seed=args.seed)
     val_crop   = XPointPatchDataset(val_dataset, patch=64, pos_ratio=0.5, retries=30, 
                                     augment=False, seed=args.seed)
@@ -1141,6 +1247,7 @@ def main():
     print(f"number of training patches per epoch: {len(train_crop)}")
     print(f"number of validation patches per epoch: {len(val_crop)}")
     print(f"Data augmentation: ENABLED for training, DISABLED for validation")
+    print(f"Validation cropping: {'FIXED' if args.fixed_val_crops else 'RANDOM'} per epoch")
     if args.seed is not None:
         print(f"Random seed: {args.seed} (reproducible mode)")
     else:
@@ -1174,7 +1281,7 @@ def main():
         benchmark.print_hardware_info()
     
     # Use the improved model
-    model = UNet(input_channels=4, base_channels=32, dropout_rate=args.dropoutRate).to(device)
+    model = UNet(input_channels=4, base_channels=args.baseChannels, dropout_rate=args.dropoutRate).to(device)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -1183,14 +1290,55 @@ def main():
     print(f"Trainable parameters: {trainable_params:,}")
     print(f"Dropout rate: {args.dropoutRate}")
 
-    criterion = DiceLoss(smooth=1.0)
+    if args.lossFunction == 'focal_dice':
+        criterion = FocalDiceLoss(alpha=args.focalAlpha, gamma=args.focalGamma,
+                                  dice_weight=args.focalDiceWeight, smooth=1.0)
+        print(f"Loss function: FocalDiceLoss (alpha={args.focalAlpha}, gamma={args.focalGamma}, dice_weight={args.focalDiceWeight})")
+    else:
+        criterion = DiceLoss(smooth=1.0)
+        print("Loss function: DiceLoss")
     
     # Use AdamW optimizer with weight decay for better generalization
     optimizer = optim.AdamW(model.parameters(), lr=args.learningRate, weight_decay=args.weightDecay)
     print(f"Optimizer: AdamW with learning_rate={args.learningRate}, weight_decay={args.weightDecay}")
     
-    # Learning rate scheduler with cosine annealing
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    # Learning rate scheduler (with optional warmup)
+    if args.scheduler == 'plateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=args.plateau_factor,
+            patience=args.plateau_patience,
+            min_lr=args.plateau_min_lr
+        )
+        print(f"Scheduler: ReduceLROnPlateau (factor={args.plateau_factor}, patience={args.plateau_patience}, min_lr={args.plateau_min_lr})")
+    else:
+        if args.warmupEpochs > 0:
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=args.epochs - args.warmupEpochs, eta_min=1e-6
+            )
+            warmup_scheduler = optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=args.warmupEpochs
+            )
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[args.warmupEpochs]
+            )
+            print(f"Scheduler: CosineAnnealingLR with {args.warmupEpochs}-epoch linear warmup")
+        else:
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+            print("Scheduler: CosineAnnealingLR")
+    
+    # SWA setup
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = int(args.epochs * args.swaStart)
+    if args.swa:
+        from torch.optim.swa_utils import AveragedModel, SWALR
+        swa_model = AveragedModel(model)
+        swa_scheduler = SWALR(optimizer, swa_lr=args.learningRate * 0.1)
+        print(f"SWA: Enabled (starts at epoch {swa_start_epoch})")
     
     # --- AMP Setup (bfloat16 aware) ---
     use_amp = args.use_amp and torch.cuda.is_available()
@@ -1213,7 +1361,7 @@ def main():
     best_val_loss = float('inf')
 
     if os.path.exists(latest_checkpoint_path) and not args.smoke_test:
-        model, optimizer, start_epoch, train_loss, val_loss = load_model_checkpoint(
+        model, optimizer, start_epoch, train_loss, val_loss, scaler, best_val_loss = load_model_checkpoint(
             model, optimizer, latest_checkpoint_path
         )
         print(f"Resuming training from epoch {start_epoch+1}")
@@ -1230,6 +1378,9 @@ def main():
     num_epochs = args.epochs
     for epoch in range(start_epoch, num_epochs):
         train_loss_epoch = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark)
+        if args.fixed_val_crops:
+            val_seed = args.seed if args.seed is not None else 0
+            val_crop.reset_rng(val_seed)
         val_loss_epoch = validate_one_epoch(model, val_loader, criterion, device, use_amp, amp_dtype)
         
         train_loss.append(train_loss_epoch)
@@ -1246,10 +1397,16 @@ def main():
         print(log_msg)
         
         # Learning rate scheduling
-        scheduler.step()
+        if args.swa and epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        elif args.scheduler == 'plateau':
+            scheduler.step(val_loss_epoch)
+        else:
+            scheduler.step()
         
         # Check for improvement
-        if val_loss[-1] < best_val_loss:
+        if val_loss[-1] < best_val_loss - args.early_stop_min_delta:
             best_val_loss = val_loss[-1]
             patience_counter = 0
             print(f"   New best validation loss: {best_val_loss:.6f}")
@@ -1262,10 +1419,42 @@ def main():
         if (epoch+1) % args.checkPointFrequency == 0:
             save_model_checkpoint(model, optimizer, train_loss, val_loss, epoch+1, checkpoint_dir, scaler, best_val_loss)
         
-        # Early stopping
-        if patience_counter >= args.patience:
+        # Early stopping (disabled during SWA phase)
+        if patience_counter >= args.patience and not (args.swa and epoch >= swa_start_epoch):
             print(f"Early stopping triggered after {epoch+1} epochs (patience={args.patience})")
             break
+
+    # Finalize SWA: update batch normalization statistics
+    if args.swa and swa_model is not None:
+        print("Updating SWA batch normalization statistics...")
+        # Custom BN update since our DataLoader yields dicts, not raw tensors
+        momenta = {}
+        for module in swa_model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.running_mean = torch.zeros_like(module.running_mean)
+                module.running_var = torch.ones_like(module.running_var)
+                momenta[module] = module.momentum
+                module.momentum = None
+                module.num_batches_tracked *= 0
+        swa_model.train()
+        with torch.no_grad():
+            for batch in train_loader:
+                all_data = batch["all"].to(device)
+                with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
+                    swa_model(all_data)
+        for module, momentum in momenta.items():
+            module.momentum = momentum
+        # Save SWA model as best if it improves val loss
+        swa_model.eval()
+        swa_val_loss = validate_one_epoch(swa_model, val_loader, criterion, device, use_amp, amp_dtype)
+        print(f"SWA model validation loss: {swa_val_loss:.6f} (vs best: {best_val_loss:.6f})")
+        if swa_val_loss < best_val_loss:
+            print("SWA model is better - saving as best model")
+            # Extract the inner module for saving
+            torch.save(swa_model.module.state_dict(), os.path.join(checkpoint_dir, "best_model.pt"))
+            best_val_loss = swa_val_loss
+        else:
+            print("SWA model did not improve - keeping original best model")
 
     plot_training_history(train_loss, val_loss, save_path='plots/training_history.png')
     print("time (s) to train model: " + str(timer()-t2))
