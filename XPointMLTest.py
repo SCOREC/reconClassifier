@@ -95,8 +95,44 @@ def expand_xpoints_mask(binary_mask, kernel_size=9):
         
         # Set the square area to 1
         expanded_mask[x_min:x_max, y_min:y_max] = 1
-    
+
     return expanded_mask
+
+def gaussian_xpoints_mask(xpts, shape, sigma=3.0):
+    """
+    Render a soft Gaussian heatmap target with one 2D Gaussian centered on each
+    X-point. Overlapping Gaussians are combined by elementwise max so the peak
+    of each X-point stays at 1.0 even when X-points are close together.
+
+    Parameters:
+    xpts : (N, 2) array of (row, col) X-point coordinates
+    shape : (H, W) output shape
+    sigma : float, Gaussian std in pixels (default 3.0; the existing 9x9 binary
+            mask has effective radius ~4 pixels, so sigma=3 gives a slightly
+            tighter, smoother target)
+
+    Returns:
+    (H, W) np.ndarray with values in [0, 1].
+    """
+    H, W = shape
+    heatmap = np.zeros((H, W), dtype=np.float32)
+    if len(xpts) == 0:
+        return heatmap
+
+    # Render each Gaussian into a local window of half-width 3*sigma (covers
+    # > 99% of the Gaussian's mass) instead of computing over the full frame.
+    half = int(np.ceil(3.0 * sigma))
+    two_sigma_sq = 2.0 * sigma * sigma
+    for (r, c) in xpts:
+        r0, r1 = max(0, r - half), min(H, r + half + 1)
+        c0, c1 = max(0, c - half), min(W, c + half + 1)
+        if r0 >= r1 or c0 >= c1:
+            continue
+        ys, xs = np.ogrid[r0:r1, c0:c1]
+        g = np.exp(-((ys - r) ** 2 + (xs - c) ** 2) / two_sigma_sq)
+        # Max-merge so a peak shared by overlapping Gaussians stays at 1.0
+        heatmap[r0:r1, c0:c1] = np.maximum(heatmap[r0:r1, c0:c1], g)
+    return heatmap
 
 def rotate(frameData,deg):
     if deg not in [90, 180, 270]:
@@ -223,17 +259,24 @@ class XPointDataset(Dataset):
       - Returns (psiTensor, maskTensor) as a PyTorch (float) pair.
     """
     def __init__(self, paramFile, fnumList, xptCacheDir=None,
-                 rotateAndReflect=False, verbosity=0):
+                 rotateAndReflect=False, verbosity=0,
+                 target_type='binary', gaussian_sigma=3.0):
         """
         paramFile:   Path to parameter file (string).
-        fnumList:    List of frames to iterate. 
+        fnumList:    List of frames to iterate.
         rotateAndReflect: If True, creates static augmented copies (deprecated, use on-the-fly instead)
+        target_type: 'binary' (current 9x9 dilation, default) or 'gaussian'
+                     (soft heatmap with sigma=gaussian_sigma).
+        gaussian_sigma: Std (in pixels) for gaussian target rendering. Ignored
+                        unless target_type='gaussian'.
         """
         super().__init__()
         self.paramFile   = paramFile
         self.fnumList    = list(fnumList)  # ensure indexable
         self.xptCacheDir = xptCacheDir
         self.verbosity = verbosity
+        self.target_type = target_type
+        self.gaussian_sigma = float(gaussian_sigma)
 
         # We'll store a base 'params' once here, and then customize in __getitem__:
         self.params = {}
@@ -303,11 +346,18 @@ class XPointDataset(Dataset):
         if self.verbosity > 0:
           print("time (s) to find X and O points: " + str(timer()-t2))
 
-        # Create array of 0s with 1s only at X points
-        binaryMap = np.zeros(np.shape(fields["psi"]))
-        binaryMap[fields["xpts"][:, 0], fields["xpts"][:, 1]] = 1
-
-        binaryMap = expand_xpoints_mask(binaryMap, kernel_size=9)
+        # Build the per-pixel target map. Binary mode is the original 9x9
+        # dilation; gaussian mode places a Gaussian on each X-point and
+        # produces continuous values in [0, 1] for heatmap regression.
+        if self.target_type == 'gaussian':
+            binaryMap = gaussian_xpoints_mask(
+                fields["xpts"], np.shape(fields["psi"]),
+                sigma=self.gaussian_sigma,
+            )
+        else:
+            binaryMap = np.zeros(np.shape(fields["psi"]))
+            binaryMap[fields["xpts"][:, 0], fields["xpts"][:, 1]] = 1
+            binaryMap = expand_xpoints_mask(binaryMap, kernel_size=9)
 
         # Normalize input features for better training stability
         psi_norm = (fields["psi"] - fields["psi"].mean()) / (fields["psi"].std() + 1e-8)
@@ -676,6 +726,38 @@ class FocalDiceLoss(nn.Module):
 
         return (1 - self.dice_weight) * focal_loss + self.dice_weight * dice_loss
 
+
+class FocalHeatmapLoss(nn.Module):
+    """CenterNet-style penalty-reduced focal loss for Gaussian heatmap targets.
+
+    Targets are continuous values in [0, 1] with peak 1.0 at each X-point.
+    For the peak pixels (target == 1) it applies the standard focal positive
+    term. For non-peak pixels it applies a penalty-reduced negative term that
+    discounts the loss near the Gaussian's wings (where the target is close to
+    1 but not exactly), so the Gaussian falloff isn't penalized as a hard
+    background mistake.
+
+    Reference: Law and Deng, CornerNet (2018); Zhou et al., CenterNet (2019).
+    """
+    def __init__(self, alpha=2.0, beta=4.0, eps=1e-6):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+
+    def forward(self, inputs, targets):
+        # inputs are raw logits; squash to probabilities and clamp for log stability
+        pred = torch.sigmoid(inputs).clamp(self.eps, 1.0 - self.eps)
+        pos_mask = targets.eq(1).float()
+        neg_mask = 1.0 - pos_mask
+
+        pos_loss = -((1 - pred) ** self.alpha) * torch.log(pred) * pos_mask
+        neg_loss = -((1 - targets) ** self.beta) * (pred ** self.alpha) * torch.log(1 - pred) * neg_mask
+
+        n_pos = pos_mask.sum().clamp(min=1.0)
+        return (pos_loss.sum() + neg_loss.sum()) / n_pos
+
+
 # TRAIN & VALIDATION UTILS
 def train_one_epoch(model, loader, criterion, optimizer, device, scaler, use_amp, amp_dtype, benchmark=None):
     model.train()
@@ -927,14 +1009,28 @@ def parseCommandLineArgs():
     parser.add_argument('--posRatio', type=float, default=0.5,
                         help='target ratio of patches containing X-points (default: 0.5)')
     parser.add_argument('--lossFunction', type=str, default='dice',
-                        choices=['dice', 'focal_dice'],
-                        help='loss function: dice (default) or focal_dice (combined focal + dice)')
+                        choices=['dice', 'focal_dice', 'heatmap_focal'],
+                        help='loss function: dice (default), focal_dice (focal + dice), '
+                             'or heatmap_focal (CenterNet-style penalty-reduced focal '
+                             'loss for Gaussian heatmap targets)')
     parser.add_argument('--focalAlpha', type=float, default=0.75,
                         help='focal loss alpha (class balance weight, default: 0.75)')
     parser.add_argument('--focalGamma', type=float, default=2.0,
                         help='focal loss gamma (focusing parameter, default: 2.0)')
     parser.add_argument('--focalDiceWeight', type=float, default=0.5,
                         help='weight of dice component in FocalDiceLoss (default: 0.5)')
+    parser.add_argument('--heatmapAlpha', type=float, default=2.0,
+                        help='FocalHeatmapLoss alpha exponent on (1-pred) for the '
+                             'positive term (default: 2.0, CornerNet value)')
+    parser.add_argument('--heatmapBeta', type=float, default=4.0,
+                        help='FocalHeatmapLoss beta exponent on (1-target) for the '
+                             'penalty-reduced negative term (default: 4.0, CornerNet value)')
+    parser.add_argument('--targetType', type=str, default='binary',
+                        choices=['binary', 'gaussian'],
+                        help='per-pixel target representation: binary 9x9 mask (default) '
+                             'or gaussian heatmap with std=gaussianSigma')
+    parser.add_argument('--gaussianSigma', type=float, default=3.0,
+                        help='std (in pixels) of the Gaussian for gaussian targets (default: 3.0)')
     parser.add_argument('--warmupEpochs', type=int, default=0,
                         help='number of linear warmup epochs before cosine decay (default: 0)')
     parser.add_argument('--swa', action='store_true',
@@ -1230,9 +1326,11 @@ def main():
         
         # Set rotateAndReflect=False - we'll use on-the-fly augmentation instead
         train_dataset = XPointDataset(args.paramFile, train_fnums,
-            xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
+            xptCacheDir=args.xptCacheDir, rotateAndReflect=False,
+            target_type=args.targetType, gaussian_sigma=args.gaussianSigma)
         val_dataset   = XPointDataset(args.paramFile, val_fnums,
-            xptCacheDir=args.xptCacheDir, rotateAndReflect=False)
+            xptCacheDir=args.xptCacheDir, rotateAndReflect=False,
+            target_type=args.targetType, gaussian_sigma=args.gaussianSigma)
     
     # Enable augmentation for training, disable for validation
     train_crop = XPointPatchDataset(train_dataset, patch=64, pos_ratio=args.posRatio, retries=30, 
@@ -1294,6 +1392,12 @@ def main():
         criterion = FocalDiceLoss(alpha=args.focalAlpha, gamma=args.focalGamma,
                                   dice_weight=args.focalDiceWeight, smooth=1.0)
         print(f"Loss function: FocalDiceLoss (alpha={args.focalAlpha}, gamma={args.focalGamma}, dice_weight={args.focalDiceWeight})")
+    elif args.lossFunction == 'heatmap_focal':
+        if args.targetType != 'gaussian':
+            print(f"WARNING: heatmap_focal loss is intended for Gaussian targets, "
+                  f"but --targetType={args.targetType}. Continuing anyway.")
+        criterion = FocalHeatmapLoss(alpha=args.heatmapAlpha, beta=args.heatmapBeta)
+        print(f"Loss function: FocalHeatmapLoss (alpha={args.heatmapAlpha}, beta={args.heatmapBeta})")
     else:
         criterion = DiceLoss(smooth=1.0)
         print("Loss function: DiceLoss")
