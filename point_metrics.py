@@ -8,6 +8,41 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
+from scipy.ndimage import label as cc_label
+from scipy.ndimage import maximum as cc_maximum
+
+
+# PEAK EXTRACTION
+def extract_peaks(heatmap, threshold=0.3, max_components=20000):
+    """Extract one (row, col, confidence) peak per connected component above threshold (max-valued pixel in each).
+
+    Ties within a component resolve to the lowest row-major index, matching
+    np.argmax. Returns empty arrays if the component count exceeds
+    max_components, which signals a speckled heatmap from an undertrained
+    model rather than real peaks.
+    """
+    empty = (np.zeros(0, dtype=int), np.zeros(0, dtype=int), np.zeros(0, dtype=float))
+    above = heatmap > threshold
+    if not above.any():
+        return empty
+
+    labels, n = cc_label(above)
+    if max_components is not None and n > max_components:
+        return empty
+
+    # Per-component maxima, then the first pixel attaining each one.
+    maxima = np.atleast_1d(cc_maximum(heatmap, labels, index=np.arange(1, n + 1)))
+    lab_flat = labels.ravel()
+    at_max = np.flatnonzero((lab_flat > 0) & (heatmap.ravel() == maxima[lab_flat - 1]))
+    # flatnonzero is ascending, so a stable sort by label keeps the lowest
+    # flat index first within each component.
+    first = at_max[np.argsort(lab_flat[at_max], kind="stable")]
+    _, starts = np.unique(lab_flat[first], return_index=True)
+    peak_flat = first[starts]
+
+    rows, cols = np.unravel_index(peak_flat, heatmap.shape)
+    confs = heatmap[rows, cols].astype(float)
+    return rows, cols, confs
 
 
 # CSV I/O
