@@ -9,13 +9,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scipy.ndimage import label as cc_label
 from torch.amp import autocast
 
 RC_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(RC_ROOT))
 
 from XPointMLTest import XPointDataset, UNet, cachedPgkylDataExists
+from point_metrics import extract_peaks
 
 
 DATASET_CONFIG = {
@@ -31,28 +31,11 @@ DATASET_CONFIG = {
         "param_path": "/work/nvme/bfim/ssridhar6/mlReconnection2025/10M/10M/rt_10M_2d_turb_local-params.txt",
         "cache_dir": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/10M",
     },
+    "PKPMv2": {
+        "param_path": "/work/nvme/bfim/ssridhar6/mlReconnection2025/1024Res_v2/rt_pkpm_2d_turb_p1-params.txt",
+        "cache_dir": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPMv2",
+    },
 }
-
-
-def extract_peaks(heatmap, threshold=0.3, min_distance=5):
-    """Extract one (row, col, confidence) peak per connected component above threshold (max-valued pixel in each)."""
-    above = heatmap > threshold
-    if not above.any():
-        return (np.zeros(0, dtype=int),
-                np.zeros(0, dtype=int),
-                np.zeros(0, dtype=float))
-    labels, n = cc_label(above)
-    rows = np.empty(n, dtype=int)
-    cols = np.empty(n, dtype=int)
-    confs = np.empty(n, dtype=float)
-    for k in range(1, n + 1):
-        mask = labels == k
-        masked = np.where(mask, heatmap, -np.inf)
-        r, c = np.unravel_index(int(np.argmax(masked)), heatmap.shape)
-        rows[k - 1] = r
-        cols[k - 1] = c
-        confs[k - 1] = float(heatmap[r, c])
-    return rows, cols, confs
 
 
 def write_pred_csv(out_path, rows, cols, confidences):
@@ -84,8 +67,8 @@ def main():
                         help="Base directory; predictions go to <output-root>/<dataset>/{N}_xpts.csv")
     parser.add_argument("--threshold", type=float, default=0.3,
                         help="Confidence threshold for peak retention (default: 0.3)")
-    parser.add_argument("--min-distance", type=int, default=5,
-                        help="Min pixel separation between peaks (NMS kernel = 2*N+1)")
+    parser.add_argument("--max-components", type=int, default=20000,
+                        help="Bail out and return no peaks above this component count (default: 20000)")
     parser.add_argument("--base-channels", type=int, default=64)
     parser.add_argument("--dropout-rate", type=float, default=0.055)
     args = parser.parse_args()
@@ -106,7 +89,7 @@ def main():
     amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
     args.output_root.mkdir(parents=True, exist_ok=True)
-    print(f"NMS: threshold={args.threshold}, min_distance={args.min_distance} px")
+    print(f"NMS: threshold={args.threshold}, max_components={args.max_components}")
 
     with torch.no_grad():
         for ds_name in args.datasets:
@@ -132,7 +115,7 @@ def main():
                     probs = torch.sigmoid(logits)
                 heatmap = probs[0, 0].float().cpu().numpy()
                 rows, cols, confs = extract_peaks(heatmap, threshold=args.threshold,
-                                                  min_distance=args.min_distance)
+                                                  max_components=args.max_components)
                 write_pred_csv(out_dir / f"{fnum}_xpts.csv", rows, cols, confs)
                 n_predicted += len(rows)
             print(f"  Wrote {len(frames)} CSV(s) in {time.time()-t1:.1f}s "

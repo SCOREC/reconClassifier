@@ -56,6 +56,10 @@ DATASETS = {
         "extract_subdir": EXTRACT_DIR / "10M",
         "param_file": "rt_10M_2d_turb_local-params.txt",
     },
+    "PKPMv2": {
+        "extract_subdir": EXTRACT_DIR / "1024Res_v2",
+        "param_file": "rt_pkpm_2d_turb_p1-params.txt",
+    },
 }
 
 
@@ -112,7 +116,7 @@ def _process_frame(task):
 
 def main():
     parser = argparse.ArgumentParser(description="Build X-point cache for transfer datasets")
-    parser.add_argument("--dataset", required=True, choices=["5M", "10M"])
+    parser.add_argument("--dataset", required=True, choices=["5M", "10M", "PKPMv2"])
     parser.add_argument("--start", type=int, default=None, help="First frame index (inclusive)")
     parser.add_argument("--end", type=int, default=None, help="Last frame index (inclusive)")
     parser.add_argument("--workers", type=int, default=1,

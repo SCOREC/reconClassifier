@@ -15,6 +15,7 @@ GT_CSV_DIRS = {
     "PKPM": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPM",
     "5M":   "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/5M",
     "10M":  "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/10M",
+    "PKPMv2": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPMv2",
 }
 
 
