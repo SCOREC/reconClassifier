@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from point_metrics import (
@@ -11,11 +12,15 @@ from point_metrics import (
 )
 
 
+# Ground-truth CSVs live under the shared cache root; override via RC_CACHE_BASE
+# (same convention as run_hessian_and_build_cache.py / predict_points.py).
+CACHE_BASE = Path(os.environ.get("RC_CACHE_BASE", "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache"))
+
 GT_CSV_DIRS = {
-    "PKPM": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPM",
-    "5M":   "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/5M",
-    "10M":  "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/10M",
-    "PKPMv2": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPMv2",
+    "PKPM": str(CACHE_BASE / "PKPM"),
+    "5M":   str(CACHE_BASE / "5M"),
+    "10M":  str(CACHE_BASE / "10M"),
+    "PKPMv2": str(CACHE_BASE / "PKPMv2"),
 }
 
 

@@ -18,22 +18,28 @@ from XPointMLTest import XPointDataset, UNet, cachedPgkylDataExists
 from point_metrics import extract_peaks
 
 
+# Base dirs, overridable via env; same RC_EXTRACT_DIR / RC_CACHE_BASE convention
+# as run_hessian_and_build_cache.py so a launcher sets paths once for the whole pipeline.
+EXTRACT_DIR = Path(os.environ.get("RC_EXTRACT_DIR", "/work/nvme/bfim/ssridhar6/mlReconnection2025"))
+CACHE_BASE = Path(os.environ.get("RC_CACHE_BASE", "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache"))
+PKPM_V0_ROOT = Path(os.environ.get("RC_PKPM_V0_ROOT", "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0"))
+
 DATASET_CONFIG = {
     "PKPM": {
-        "param_path": "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/pkpm_2d_turb_p2-params.txt",
-        "cache_dir": "/work/nvme/bfim/cwsmith/mlReconnection2025/1024Res_v0/cache04082025",
+        "param_path": str(PKPM_V0_ROOT / "pkpm_2d_turb_p2-params.txt"),
+        "cache_dir": str(PKPM_V0_ROOT / "cache04082025"),
     },
     "5M": {
-        "param_path": "/work/nvme/bfim/ssridhar6/mlReconnection2025/5M/rt_5M_2d_turb_local-params.txt",
-        "cache_dir": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/5M",
+        "param_path": str(EXTRACT_DIR / "5M" / "rt_5M_2d_turb_local-params.txt"),
+        "cache_dir": str(CACHE_BASE / "5M"),
     },
     "10M": {
-        "param_path": "/work/nvme/bfim/ssridhar6/mlReconnection2025/10M/10M/rt_10M_2d_turb_local-params.txt",
-        "cache_dir": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/10M",
+        "param_path": str(EXTRACT_DIR / "10M" / "10M" / "rt_10M_2d_turb_local-params.txt"),
+        "cache_dir": str(CACHE_BASE / "10M"),
     },
     "PKPMv2": {
-        "param_path": "/work/nvme/bfim/ssridhar6/mlReconnection2025/1024Res_v2/rt_pkpm_2d_turb_p1-params.txt",
-        "cache_dir": "/work/nvme/bfim/ssridhar6/mlReconnection2025/cache/PKPMv2",
+        "param_path": str(EXTRACT_DIR / "1024Res_v2" / "rt_pkpm_2d_turb_p1-params.txt"),
+        "cache_dir": str(CACHE_BASE / "PKPMv2"),
     },
 }
 
