@@ -170,14 +170,19 @@ def main():
     # the same script can run unchanged at margin=0 (default) or at any
     # diagnostic margin (e.g. EDGE_MARGIN=10).
     edge_margin = int(os.environ.get("EDGE_MARGIN", 0))
+    threshold = float(os.environ.get("THRESHOLD", 0.5))
     suffix_parts = []
     if OUTPUT_TAG:
         suffix_parts.append(OUTPUT_TAG)
     if edge_margin > 0:
         suffix_parts.append(f"em{edge_margin}")
+    if abs(threshold - 0.5) > 1e-9:
+        suffix_parts.append(f"th{threshold:g}".replace(".", "p"))
     suffix = ("_" + "_".join(suffix_parts)) if suffix_parts else ""
     if edge_margin > 0:
         print(f"\n[edge_margin] Excluding {edge_margin}-pixel border from metrics", flush=True)
+    if abs(threshold - 0.5) > 1e-9:
+        print(f"[threshold] Using prediction threshold {threshold} (default 0.5)", flush=True)
     print(f"\n[config] IN_DOMAIN={IN_DOMAIN}, BEST_MODEL={BEST_MODEL}, OUTPUT_TAG={OUTPUT_TAG or '(none)'}", flush=True)
 
     all_results = {}
@@ -249,7 +254,7 @@ def main():
         t0 = time.time()
         evaluator = evaluate_model_on_dataset(
             model, dataset, device,
-            use_amp=use_amp, amp_dtype=amp_dtype, threshold=0.5,
+            use_amp=use_amp, amp_dtype=amp_dtype, threshold=threshold,
             edge_margin=edge_margin,
         )
         elapsed = time.time() - t0
@@ -300,7 +305,7 @@ def main():
     t0 = time.time()
     in_evaluator = evaluate_model_on_dataset(
         model, in_dataset, device,
-        use_amp=use_amp, amp_dtype=amp_dtype, threshold=0.5,
+        use_amp=use_amp, amp_dtype=amp_dtype, threshold=threshold,
         edge_margin=edge_margin,
     )
     elapsed = time.time() - t0
