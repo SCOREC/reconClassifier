@@ -62,10 +62,11 @@ from ci_tests import SyntheticXPointDataset
 
 
 def compute_point_f1(model, full_val_dataset, cache_dir, device,
-                     use_amp, amp_dtype, threshold=0.3, radius=5.0):
-    """Point-level F1 on full val frames: NMS peaks vs ground-truth coords from the cache."""
+                     use_amp, amp_dtype, thresholds=(0.3,), radius=5.0):
+    """Point-level F1 swept over a threshold grid; returns (best_f1, best_threshold)."""
     model.eval()
-    tp = fp = fn = 0
+    thresholds = list(thresholds)
+    counts = {t: [0, 0, 0] for t in thresholds}  # tp, fp, fn per threshold
     with torch.no_grad():
         for item in full_val_dataset:
             fnum = item["fnum"]
@@ -73,16 +74,26 @@ def compute_point_f1(model, full_val_dataset, cache_dir, device,
             with autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
                 probs = torch.sigmoid(model(all_t))
             heatmap = probs[0, 0].float().cpu().numpy()
-            rows, cols, confs = extract_peaks(heatmap, threshold=threshold)
-            pred = (np.stack([rows, cols], axis=1)
-                    if len(rows) else np.zeros((0, 2), dtype=int))
             gt = np.load(Path(cache_dir) / f"{fnum}_xpts.npy")
-            r = match_points(pred, gt, radius=radius, pred_confidence=confs)
-            tp += r["tp"]; fp += r["fp"]; fn += r["fn"]
+            # The forward pass dominates, so re-extracting peaks per threshold is
+            # cheap and lets each trial be scored at its own best operating point.
+            for t in thresholds:
+                rows, cols, confs = extract_peaks(heatmap, threshold=t)
+                pred = (np.stack([rows, cols], axis=1)
+                        if len(rows) else np.zeros((0, 2), dtype=int))
+                r = match_points(pred, gt, radius=radius, pred_confidence=confs)
+                c = counts[t]
+                c[0] += r["tp"]; c[1] += r["fp"]; c[2] += r["fn"]
     model.train()
-    p = tp / (tp + fp) if (tp + fp) else 0.0
-    rec = tp / (tp + fn) if (tp + fn) else 0.0
-    return 2 * p * rec / (p + rec) if (p + rec) else 0.0
+    best_f1, best_t = 0.0, thresholds[0]
+    for t in thresholds:
+        tp, fp, fn = counts[t]
+        p = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * p * rec / (p + rec) if (p + rec) else 0.0
+        if f1 > best_f1:
+            best_f1, best_t = f1, t
+    return best_f1, best_t
 
 
 def objective(trial, args):
@@ -191,6 +202,7 @@ def objective(trial, args):
 
     best_val_loss = float("inf")
     best_f1 = 0.0
+    best_threshold = None
     patience_counter = 0
     patience = args.patience
     epochs_trained = 0
@@ -244,12 +256,13 @@ def objective(trial, args):
         if not args.smoke_test and (
             epoch % args.f1_interval == 0 or epoch == num_epochs - 1
         ):
-            f1 = compute_point_f1(
+            f1, thr = compute_point_f1(
                 model, val_dataset, args.xptCacheDir, device,
                 use_amp, amp_dtype,
-                threshold=args.nms_threshold, radius=args.match_radius,
+                thresholds=args.threshold_grid, radius=args.match_radius,
             )
-            best_f1 = max(best_f1, f1)
+            if f1 > best_f1:
+                best_f1, best_threshold = f1, thr
             trial.report(f1, epoch)
             if trial.should_prune():
                 raise TrialPruned()
@@ -264,6 +277,7 @@ def objective(trial, args):
 
     trial.set_user_attr("best_val_loss", best_val_loss)
     trial.set_user_attr("best_point_f1", best_f1)
+    trial.set_user_attr("best_threshold", best_threshold)
     trial.set_user_attr("epochs_trained", epochs_trained)
 
     return best_f1
@@ -349,8 +363,10 @@ def parse_args():
     # --- Point-level F1 evaluation (the objective) ---
     parser.add_argument("--f1-interval", type=int, default=10,
                         help="Compute point-level F1 every N epochs for pruning/objective (default 10)")
-    parser.add_argument("--nms-threshold", type=float, default=0.3,
-                        help="Confidence threshold for peak extraction (default 0.3)")
+    parser.add_argument("--threshold-grid", type=str,
+                        default="0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65",
+                        help="Comma-separated peak-extraction thresholds swept within each "
+                             "trial; the trial is scored at its best one (default 0.30..0.65)")
     parser.add_argument("--match-radius", type=float, default=5.0,
                         help="Point matching radius in pixels (default 5.0)")
 
@@ -376,7 +392,9 @@ def parse_args():
         help="Run 3 trials with synthetic data (no paramFile needed)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.threshold_grid = [float(t) for t in args.threshold_grid.split(",") if t.strip()]
+    return args
 
 
 def print_study_summary(study, results_dir, args):
@@ -424,13 +442,15 @@ def print_study_summary(study, results_dir, args):
     sorted_trials = sorted(completed, key=lambda t: t.value, reverse=True)
     print(f"\nTop 5 trials:")
     print(
-        f"  {'#':>4s}  {'PointF1':>10s}  {'LR':>10s}  {'WD':>10s}  "
+        f"  {'#':>4s}  {'PointF1':>10s}  {'Thr':>5s}  {'LR':>10s}  {'WD':>10s}  "
         f"{'Drop':>6s}  {'BS':>4s}  {'Patch':>5s}  {'Ch':>4s}  {'Sched':>8s}"
     )
     for t in sorted_trials[:5]:
         p = t.params
+        thr = t.user_attrs.get("best_threshold")
         print(
             f"  {t.number:4d}  {t.value:10.4f}  "
+            f"{(thr if thr is not None else float('nan')):5.2f}  "
             f"{p.get('learning_rate', 0):10.2e}  "
             f"{p.get('weight_decay', 0):10.2e}  "
             f"{p.get('dropout_rate', 0):6.3f}  "
