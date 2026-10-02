@@ -56,6 +56,10 @@ DATASETS = {
         "extract_subdir": EXTRACT_DIR / "10M",
         "param_file": "rt_10M_2d_turb_local-params.txt",
     },
+    "PKPMv2": {
+        "extract_subdir": EXTRACT_DIR / "1024Res_v2",
+        "param_file": "rt_pkpm_2d_turb_p1-params.txt",
+    },
 }
 
 
@@ -78,6 +82,21 @@ def discover_all_frames(extract_dir):
     return sorted(f for f in frame_nums if f > 0)
 
 
+def _write_xpts_csv(cache_dir, fnum, xpts, optsMax, optsMin):
+    """Write {fnum}_xpts.csv with row, col, class columns (class in X/Omax/Omin)."""
+    csv_path = cache_dir / f"{fnum}_xpts.csv"
+    with open(csv_path, "w") as f:
+        f.write("row,col,class\n")
+        for (r, c) in xpts:
+            f.write(f"{int(r)},{int(c)},X\n")
+        if optsMax is not None and len(optsMax) > 0:
+            for (r, c) in optsMax:
+                f.write(f"{int(r)},{int(c)},Omax\n")
+        if optsMin is not None and len(optsMin) > 0:
+            for (r, c) in optsMin:
+                f.write(f"{int(r)},{int(c)},Omin\n")
+
+
 def _process_frame(task):
     """Worker function: run the Hessian classifier on one frame and write its cache. Returns (frame_num, elapsed)."""
     param_path, fnum, cache_dir = task
@@ -90,13 +109,14 @@ def _process_frame(task):
               "fileName": fileName,
               "Bx": bx, "By": by, "Jz": jz}
     writePgkylDataToCache(cache_dir, fnum, fields)
+    _write_xpts_csv(cache_dir, fnum, xpts, optsMax, optsMin)
     elapsed = time.time() - t0
     return fnum, elapsed
 
 
 def main():
     parser = argparse.ArgumentParser(description="Build X-point cache for transfer datasets")
-    parser.add_argument("--dataset", required=True, choices=["5M", "10M"])
+    parser.add_argument("--dataset", required=True, choices=["5M", "10M", "PKPMv2"])
     parser.add_argument("--start", type=int, default=None, help="First frame index (inclusive)")
     parser.add_argument("--end", type=int, default=None, help="Last frame index (inclusive)")
     parser.add_argument("--workers", type=int, default=1,
@@ -126,6 +146,21 @@ def main():
     uncached = [f for f in frames if not cachedPgkylDataExists(cache_dir, f, "psi")]
     cached = len(frames) - len(uncached)
     print(f"Already cached: {cached}, need to compute: {len(uncached)}")
+
+    # Backfill xpts CSVs for any cached frames that don't have one yet.
+    # No classifier run -- just reads the existing .npy and writes the CSV.
+    csv_backfilled = 0
+    for f in frames:
+        if cachedPgkylDataExists(cache_dir, f, "psi") and not (cache_dir / f"{f}_xpts.csv").exists():
+            xpts = np.load(cache_dir / f"{f}_xpts.npy")
+            optsMax_path = cache_dir / f"{f}_optsMax.npy"
+            optsMin_path = cache_dir / f"{f}_optsMin.npy"
+            optsMax = np.load(optsMax_path) if optsMax_path.exists() else None
+            optsMin = np.load(optsMin_path) if optsMin_path.exists() else None
+            _write_xpts_csv(cache_dir, f, xpts, optsMax, optsMin)
+            csv_backfilled += 1
+    if csv_backfilled > 0:
+        print(f"Backfilled xpts CSV for {csv_backfilled} already-cached frame(s)")
 
     if not uncached:
         print("All frames already cached!")
