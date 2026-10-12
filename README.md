@@ -216,7 +216,7 @@ The SQLite database is created automatically on first run and reloaded on subseq
 
 `optuna_tuner_gaussian.py` is the corresponding tuner for Gaussian heatmap targets. It searches over the same training knobs (learning rate, weight decay, dropout, batch size, patch size, base channels, positive ratio, scheduler), trains every trial with `heatmap_focal` loss, and **maximizes point-level F1** on the validation frames instead of minimizing validation loss. Every `--f1-interval` epochs it runs full-frame inference on the validation frames, extracts peaks, matches them to the ground-truth X-points, and reports F1 to the pruner.
 
-The peak-extraction threshold only changes how the network's output is read, so it is not an Optuna search dimension (that would cost a full training run per threshold value). Instead, each F1 evaluation sweeps `--threshold-grid` over the same heatmaps and scores the trial at its best threshold. The winning value is stored as the trial's `best_threshold` user attribute and appears in the summary table.
+The peak-extraction threshold only changes how the network's output is read, so it is not an Optuna search dimension (that would cost a full training run per threshold value). Instead, each F1 evaluation finds peaks once at the lowest value in `--threshold-grid`, then drops peaks below each higher value in turn, and scores the trial at its best cutoff. This is the same find-then-filter rule as `--min-confidence` below. The winning value is stored as the trial's `best_threshold` user attribute and appears in the summary table.
 
 ```
 python -u ${rcRoot}/reconClassifier/optuna_tuner_gaussian.py \
@@ -234,7 +234,7 @@ Options specific to this tuner:
 - `--gaussianSigma`: Gaussian target width in pixels, held fixed during the search (default: 3.0)
 - `--heatmap-alpha`, `--heatmap-beta`: `heatmap_focal` exponents (defaults: 2.0 and 4.0)
 - `--f1-interval`: Epochs between point-level F1 evaluations (default: 10)
-- `--threshold-grid`: Comma-separated peak-extraction thresholds swept at each evaluation (default: `0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65`)
+- `--threshold-grid`: Comma-separated confidence cutoffs swept at each evaluation; peaks are found once at the lowest value and then filtered (default: `0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65`)
 - `--match-radius`: Matching radius in pixels (default: 5.0)
 - `--epochs`: Maximum epochs per trial (default: 300)
 
@@ -304,7 +304,8 @@ python -u ${rcRoot}/reconClassifier/score_point_predictions.py \
 - `--checkpoint`: Trained model weights (e.g. `checkpoints/best_model.pt`)
 - `--datasets`: Any of `PKPM`, `5M`, `10M`, `PKPMv2` (default: `PKPM 5M 10M`)
 - `--output-root`: Base directory for the per-dataset prediction CSVs
-- `--threshold`: Minimum confidence for a peak to count as a detection (default: 0.3)
+- `--threshold`: Confidence level used to find peaks; each connected region above it gives one peak (default: 0.3)
+- `--min-confidence`: Drop peaks below this confidence after they are found (default: keep all)
 - `--max-components`: If a frame's thresholded confidence map splits into more regions than this, no peaks are returned for it, since that indicates an undertrained model rather than real detections (default: 20000)
 - `--base-channels`: Must match the value the checkpoint was trained with (default: 64)
 
@@ -312,12 +313,13 @@ python -u ${rcRoot}/reconClassifier/score_point_predictions.py \
 - `--predictions-root`: Directory with one subdirectory of prediction CSVs per dataset
 - `--datasets`: Datasets to score (default: `PKPM 5M 10M`)
 - `--radius`: Matching radius in pixels (default: 5.0)
+- `--min-confidence`: Drop predicted peaks below this confidence before matching, so one set of predictions can be scored at any cutoff above the one used to find them (default: keep all)
 - `--label`: Name shown in the summary table
 - `--json-out`: Optional JSON file with the global results and a per-frame breakdown
 
 **Held-out numbers.** Both scripts process every cached frame, so on a dataset the model was trained on, the printed F1 mixes training and held-out frames and will look better than held-out performance. Report held-out results from the validation or test frames only, for example by aggregating those frames' TP/FP/FN from the per-frame breakdown in `--json-out`.
 
-**Choosing the threshold.** `--threshold` sets the operating point; it is not learned by the network. Raising it drops low-confidence detections, trading recall for precision, and F1 can be sensitive to it. Choose it on validation frames and report results on frames that were not used to choose it.
+**Choosing the cutoff.** The confidence cutoff sets the operating point; it is not learned by the network. Raising it drops low-confidence detections, trading recall for precision, and F1 can be sensitive to it. Raise it with `--min-confidence` rather than `--threshold`: find peaks at a low `--threshold` (0.3) and then drop the weak ones. Raising `--threshold` itself re-finds peaks at the higher level, where one region can split into two separate peaks and add false positives. Because the prediction CSVs keep every peak found at `--threshold` with its confidence, `score_point_predictions.py --min-confidence` can test any higher cutoff without re-running the model. Choose the cutoff on validation frames and report results on frames that were not used to choose it.
 
 **Data locations.** Dataset paths are built from environment variables, so a launcher script can point the whole pipeline at a different environment by exporting them, just as the training launchers set `--paramFile` and `--xptCacheDir`. The defaults are the shared DeltaAI locations:
 

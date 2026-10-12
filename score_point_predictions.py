@@ -50,8 +50,14 @@ def load_pred_csvs_with_confidence(pred_dir):
     return pred_by_frame, conf_by_frame
 
 
-def score_one(pred_dir, gt_dir, radius):
+def score_one(pred_dir, gt_dir, radius, min_confidence=None):
+    """Score one dataset, optionally keeping only peaks at or above min_confidence."""
     pred_by_frame, conf_by_frame = load_pred_csvs_with_confidence(pred_dir)
+    if min_confidence is not None:
+        for fid, confs in conf_by_frame.items():
+            keep = confs >= min_confidence
+            pred_by_frame[fid] = pred_by_frame[fid][keep]
+            conf_by_frame[fid] = confs[keep]
     frame_ids = sorted(pred_by_frame.keys())
     gt_by_frame = load_xpts_csvs_for_frames(gt_dir, frame_ids, classes=("X",))
     return evaluate_point_predictions(pred_by_frame, gt_by_frame,
@@ -67,6 +73,11 @@ def main():
                         choices=list(GT_CSV_DIRS))
     parser.add_argument("--radius", type=float, default=5.0,
                         help="Matching radius in pixels (default: 5.0)")
+    parser.add_argument("--min-confidence", type=float, default=None,
+                        help="Drop predicted peaks below this confidence before scoring. "
+                             "Raising the operating point this way beats re-running peak "
+                             "extraction at a higher threshold, which splits blobs into "
+                             "extra false positives (default: keep all)")
     parser.add_argument("--label", default="model",
                         help="Label to print in the summary row (e.g. 'PKPM-trained')")
     parser.add_argument("--json-out", type=Path, default=None,
@@ -74,7 +85,8 @@ def main():
     args = parser.parse_args()
 
     print(f"\n{'='*78}")
-    print(f"POINT-LEVEL F1  (label={args.label}, radius={args.radius:.1f} px)")
+    cutoff = "all peaks" if args.min_confidence is None else f"confidence >= {args.min_confidence:.2f}"
+    print(f"POINT-LEVEL F1  (label={args.label}, radius={args.radius:.1f} px, {cutoff})")
     print(f"{'='*78}")
     print(f"{'Dataset':<8} {'F1':>7} {'Prec':>7} {'Rec':>7} {'TP':>6} {'FP':>6} {'FN':>6} {'Frames':>7}")
     print("-" * 78)
@@ -85,7 +97,8 @@ def main():
         if not pred_dir.is_dir():
             print(f"{ds:<8} (no predictions directory at {pred_dir})")
             continue
-        result = score_one(pred_dir, GT_CSV_DIRS[ds], radius=args.radius)
+        result = score_one(pred_dir, GT_CSV_DIRS[ds], radius=args.radius,
+                           min_confidence=args.min_confidence)
         g = result["global"]
         n_frames = len(result["per_frame"])
         print(f"{ds:<8} {g['f1']:>7.4f} {g['precision']:>7.4f} {g['recall']:>7.4f} "
@@ -97,6 +110,7 @@ def main():
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump({"label": args.label, "radius": args.radius,
+                       "min_confidence": args.min_confidence,
                        "results": all_results}, f, indent=2)
         print(f"Wrote JSON: {args.json_out}")
 

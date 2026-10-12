@@ -65,7 +65,7 @@ def compute_point_f1(model, full_val_dataset, cache_dir, device,
                      use_amp, amp_dtype, thresholds=(0.3,), radius=5.0):
     """Point-level F1 swept over a threshold grid; returns (best_f1, best_threshold)."""
     model.eval()
-    thresholds = list(thresholds)
+    thresholds = sorted(thresholds)
     counts = {t: [0, 0, 0] for t in thresholds}  # tp, fp, fn per threshold
     with torch.no_grad():
         for item in full_val_dataset:
@@ -75,13 +75,15 @@ def compute_point_f1(model, full_val_dataset, cache_dir, device,
                 probs = torch.sigmoid(model(all_t))
             heatmap = probs[0, 0].float().cpu().numpy()
             gt = np.load(Path(cache_dir) / f"{fnum}_xpts.npy")
-            # The forward pass dominates, so re-extracting peaks per threshold is
-            # cheap and lets each trial be scored at its own best operating point.
+            # Find peaks once at the lowest cutoff, then filter by confidence. Re-extracting
+            # at a higher cutoff splits blobs into extra peaks and scores worse, so each trial
+            # is scored at its own best operating point using the rule we actually deploy.
+            rows, cols, confs = extract_peaks(heatmap, threshold=thresholds[0])
+            pts = (np.stack([rows, cols], axis=1)
+                   if len(rows) else np.zeros((0, 2), dtype=int))
             for t in thresholds:
-                rows, cols, confs = extract_peaks(heatmap, threshold=t)
-                pred = (np.stack([rows, cols], axis=1)
-                        if len(rows) else np.zeros((0, 2), dtype=int))
-                r = match_points(pred, gt, radius=radius, pred_confidence=confs)
+                keep = confs >= t
+                r = match_points(pts[keep], gt, radius=radius, pred_confidence=confs[keep])
                 c = counts[t]
                 c[0] += r["tp"]; c[1] += r["fp"]; c[2] += r["fn"]
     model.train()
@@ -365,8 +367,9 @@ def parse_args():
                         help="Compute point-level F1 every N epochs for pruning/objective (default 10)")
     parser.add_argument("--threshold-grid", type=str,
                         default="0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65",
-                        help="Comma-separated peak-extraction thresholds swept within each "
-                             "trial; the trial is scored at its best one (default 0.30..0.65)")
+                        help="Comma-separated confidence cutoffs swept within each trial; peaks "
+                             "are found once at the lowest value and then filtered, and the trial "
+                             "is scored at its best cutoff (default 0.30..0.65)")
     parser.add_argument("--match-radius", type=float, default=5.0,
                         help="Point matching radius in pixels (default 5.0)")
 

@@ -73,6 +73,11 @@ def main():
                         help="Base directory; predictions go to <output-root>/<dataset>/{N}_xpts.csv")
     parser.add_argument("--threshold", type=float, default=0.3,
                         help="Confidence threshold for peak retention (default: 0.3)")
+    parser.add_argument("--min-confidence", type=float, default=None,
+                        help="Drop peaks below this confidence after extraction. Use this to "
+                             "raise the operating point instead of raising --threshold, which "
+                             "re-finds peaks and splits blobs into extra false positives "
+                             "(default: keep all)")
     parser.add_argument("--max-components", type=int, default=20000,
                         help="Bail out and return no peaks above this component count (default: 20000)")
     parser.add_argument("--base-channels", type=int, default=64)
@@ -95,7 +100,8 @@ def main():
     amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
     args.output_root.mkdir(parents=True, exist_ok=True)
-    print(f"NMS: threshold={args.threshold}, max_components={args.max_components}")
+    print(f"NMS: threshold={args.threshold}, max_components={args.max_components}, "
+          f"min_confidence={args.min_confidence}")
 
     with torch.no_grad():
         for ds_name in args.datasets:
@@ -122,6 +128,9 @@ def main():
                 heatmap = probs[0, 0].float().cpu().numpy()
                 rows, cols, confs = extract_peaks(heatmap, threshold=args.threshold,
                                                   max_components=args.max_components)
+                if args.min_confidence is not None:
+                    keep = confs >= args.min_confidence
+                    rows, cols, confs = rows[keep], cols[keep], confs[keep]
                 write_pred_csv(out_dir / f"{fnum}_xpts.csv", rows, cols, confs)
                 n_predicted += len(rows)
             print(f"  Wrote {len(frames)} CSV(s) in {time.time()-t1:.1f}s "
